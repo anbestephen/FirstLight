@@ -98,6 +98,8 @@ def test_tier1_cloud_meta_api_success_and_timeout_config(
     req = captured_requests[0]
     assert str(req.url) == f"{META_MODEL_API_BASE_URL}/chat/completions"
     assert req.headers["Authorization"] == "Bearer test-meta-spark-key-123"
+    req_body = json.loads(req.content.decode("utf-8"))
+    assert req_body["model"] == "muse-spark-1.3"
 
     assert result.tier_used == ConnectivityTier.TIER_1_CLOUD
     assert result.fallback_chain == ["tier_1_cloud:success"]
@@ -336,16 +338,16 @@ async def test_meta_model_suite_wonder_voice_and_image_failover() -> None:
     )
     suite = MetaModelSuite(router)
 
-    # 1. Verify all 6 models are reported in get_models_status
+    # 1. Verify all 6 models are reported in get_models_status with versioned IDs
     status = suite.get_models_status(force_offline=False)
     assert status["total_models"] == 6
     model_ids = [m["model_id"] for m in status["models"]]
     assert model_ids == [
         "sam-3.1",
-        "muse-spark",
-        "muse-wonder",
-        "muse-voice-transcribe",
-        "muse-image",
+        "muse-spark-1.3",
+        "muse-wonder-1.0",
+        "muse-voice-transcribe-1.0",
+        "muse-image-1.0",
         "open-weight-mlx-4bit",
     ]
 
@@ -361,33 +363,36 @@ async def test_meta_model_suite_wonder_voice_and_image_failover() -> None:
         }
     ]
 
-    # 2. Test muse-wonder in force_offline=True mode
+    # 2. Test muse-wonder-1.0 in force_offline=True mode (strictly deterministic provenance)
     briefing_offline = await suite.generate_incident_briefing(
         sample_recs,
         vehicle_class="fire_engine",
         force_offline=True,
     )
-    assert briefing_offline.model_id == "muse-wonder"
+    assert briefing_offline.model_id == "muse-wonder-1.0"
     assert briefing_offline.force_offline is True
-    assert briefing_offline.tier_used in (
-        ConnectivityTier.TIER_2_MLX,
-        ConnectivityTier.TIER_3_DETERMINISTIC,
-    )
+    assert briefing_offline.tier_used == ConnectivityTier.TIER_3_DETERMINISTIC
+    assert "tier_3_deterministic_briefing" in briefing_offline.fallback_chain
     assert briefing_offline.total_structures_unlockable == 6
     assert "US Highway 98" in briefing_offline.executive_summary
+    assert "[DETERMINISTIC GEOMETRIC TRIAGE — NO LLM EXECUTED]" in briefing_offline.executive_summary
+    assert "[MUSE-WONDER STRATEGIC PLAN]" not in briefing_offline.executive_summary
 
-    # 3. Test muse-voice-transcribe in force_offline=True mode
+    # 3. Test muse-voice-transcribe-1.0 in force_offline=True mode
     voice_offline = await suite.transcribe_and_parse_voice_dispatch(
         voice_command_text="Dispatch Ambulance and clear top choke point on 15th Street",
         top_edge_id="10-20-0",
         top_road_name="15th Street",
         force_offline=True,
     )
-    assert voice_offline.model_id == "muse-voice-transcribe"
+    assert voice_offline.model_id == "muse-voice-transcribe-1.0"
+    assert voice_offline.tier_used == ConnectivityTier.TIER_3_DETERMINISTIC
+    assert "tier_3_deterministic_voice_parser" in voice_offline.fallback_chain
+    assert "[DETERMINISTIC REGEX DISPATCH — NO ASR MODEL EXECUTED]" in voice_offline.action_summary
     assert voice_offline.vehicle_class == "ambulance"
     assert voice_offline.simulate_clear_edge_id == "10-20-0"
 
-    # 4. Test muse-image tactical schematic PNG generation in offline mode
+    # 4. Test muse-image-1.0 tactical schematic PNG generation in offline mode
     img = Image.new("RGB", (256, 256), color=(40, 60, 80))
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -403,25 +408,37 @@ async def test_meta_model_suite_wonder_voice_and_image_failover() -> None:
     assert schematic_bytes[:8] == b"\x89PNG\r\n\x1a\n"
     out_img = Image.open(io.BytesIO(schematic_bytes))
     assert out_img.size == (256, 256)
+    assert suite.last_schematic_meta["label"] == "Deterministic Caliper Overlay (Muse Image Offline)"
+    assert "tier_3_deterministic_caliper_overlay" in suite.last_schematic_meta["fallback_chain"]
 
-    # 5. Verify fast_edge_inference on a 256x256 RGB image never overflows float16 to luma=inf / texture_std=inf
-    fast_router = VLMFailoverRouter(
-        local_mlx_model_path="models/Llama-3.2-11B-Vision-Instruct-4bit",
-        mode=FailoverMode.FORCE_MLX,
-        fast_edge_inference=True,
-    )
-    telemetry = GeometricTelemetry(
-        target_id="edge-256-test",
-        road_name="US Highway 98",
-        min_clear_width_m=2.65,
-        debris_area_m2=24.0,
-    )
-    edge_res = await fast_router.assess_damage_async(
-        telemetry, image_source=buf.getvalue(), force_offline=True
-    )
-    assert "luma=inf" not in edge_res.passability_rationale
-    assert "texture_std=inf" not in edge_res.passability_rationale
-    assert "luma=nan" not in edge_res.passability_rationale
-    assert "luma=" in edge_res.passability_rationale
+    # 5. Verify HTTP 404 model_not_found is logged explicitly in fallback_chain and Tier 3 rationale never claims MLX ran
+    def model_not_found_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=404,
+            json={"error": {"message": "Model not found", "code": "model_not_found"}},
+            request=request,
+        )
+
+    transport = httpx.MockTransport(model_not_found_handler)
+    async with httpx.AsyncClient(transport=transport) as async_client:
+        honest_router = VLMFailoverRouter(
+            api_key="test-meta-key",
+            local_mlx_model_path="models/non-existent-mlx-weights",
+        )
+        telemetry = GeometricTelemetry(
+            target_id="edge-256-test",
+            road_name="US Highway 98",
+            min_clear_width_m=2.65,
+            debris_area_m2=24.0,
+        )
+        honest_res = await honest_router.assess_damage_async(
+            telemetry,
+            image_source=buf.getvalue(),
+            async_client=async_client,
+        )
+    assert honest_res.tier_used == ConnectivityTier.TIER_3_DETERMINISTIC
+    assert honest_res.fallback_chain[0] == "tier_1_cloud:http_404:model_not_found"
+    assert "[DETERMINISTIC SAM/GEOMETRY FALLBACK]" in honest_res.passability_rationale
+    assert "Apple Silicon MLX" not in honest_res.passability_rationale
 
 

@@ -56,9 +56,20 @@ SEVERITY_TO_SCORE: dict[DamageSeverity, int] = {
 }
 
 META_MODEL_API_BASE_URL = "https://api.meta.ai/v1"
-DEFAULT_CLOUD_MODEL = "muse-spark"
+DEFAULT_CLOUD_MODEL = "muse-spark-1.3"
 DEFAULT_LOCAL_MLX_MODEL_PATH = "models/Llama-3.2-11B-Vision-Instruct-4bit"
 DEFAULT_CLOUD_TIMEOUT_S = 2.5
+
+
+def _format_cloud_exception(prefix: str, exc: Exception) -> str:
+    """Format cloud API exceptions with explicit HTTP status codes and `model_not_found` detection."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        status_code = exc.response.status_code
+        body_lower = exc.response.text.lower() if exc.response is not None else ""
+        if "model_not_found" in body_lower or "does not exist" in body_lower:
+            return f"{prefix}:http_{status_code}:model_not_found"
+        return f"{prefix}:http_{status_code}:{type(exc).__name__}"
+    return f"{prefix}:error:{type(exc).__name__}"
 
 
 class ConnectivityTier(str, Enum):
@@ -286,17 +297,17 @@ def evaluate_deterministic_tier3(
 
     if telemetry.has_water_obstruction:
         cue = (
-            f"Deterministic geometry detected {telemetry.water_area_m2:.2f} m² standing water/washout "
+            f"[DETERMINISTIC SAM/GEOMETRY FALLBACK] Detected {telemetry.water_area_m2:.2f} m² standing water/washout "
             f"and {telemetry.debris_area_m2:.2f} m² debris."
         )
     elif telemetry.debris_area_m2 > 0.0:
         cue = (
-            f"Deterministic geometry measured {telemetry.debris_area_m2:.2f} m² debris reducing "
+            f"[DETERMINISTIC SAM/GEOMETRY FALLBACK] Measured {telemetry.debris_area_m2:.2f} m² debris reducing "
             f"corridor span to {telemetry.min_clear_width_m:.2f}m."
         )
     else:
         cue = (
-            f"Deterministic geometry confirmed unobstructed {telemetry.min_clear_width_m:.2f}m corridor."
+            f"[DETERMINISTIC SAM/GEOMETRY FALLBACK] Confirmed unobstructed {telemetry.min_clear_width_m:.2f}m corridor."
         )
 
     return building_severity, road_severity, cue
@@ -365,7 +376,6 @@ class VLMFailoverRouter:
         local_mlx_model_path: str | Path = DEFAULT_LOCAL_MLX_MODEL_PATH,
         mode: FailoverMode = FailoverMode.AUTO,
         mlx_runner: Callable[[str, str | Path | Image.Image | None, Path], str] | None = None,
-        fast_edge_inference: bool = True,
     ) -> None:
         self.api_key = api_key if api_key is not None else os.environ.get("MODEL_API_KEY", "")
         self.api_base_url = api_base_url.rstrip("/")
@@ -374,7 +384,6 @@ class VLMFailoverRouter:
         self.local_mlx_model_path = Path(local_mlx_model_path)
         self.mode = mode
         self._custom_mlx_runner = mlx_runner
-        self.fast_edge_inference = fast_edge_inference
         self.last_tier_used: ConnectivityTier = ConnectivityTier.TIER_3_DETERMINISTIC
         self.last_fallback_chain: list[str] = []
 
@@ -509,8 +518,8 @@ class VLMFailoverRouter:
         prompt = self._build_vlm_prompt(telemetry)
         model = None
         processor = None
-        vision_tensor = None
         memory_cleared = False
+        temp_img_path: Path | None = None
 
         try:
             if self._custom_mlx_runner is not None:
@@ -520,55 +529,38 @@ class VLMFailoverRouter:
                     else image_source
                 )
                 raw_output = self._custom_mlx_runner(prompt, img_arg, self.local_mlx_model_path)
-            elif self.fast_edge_inference:
-                import mlx.core as mx
-                import numpy as np
-                from mlx_vlm.utils import load_config
-
-                config = load_config(str(self.local_mlx_model_path))
-                quant_bits = (config.get("quantization") or {}).get("bits", 4)
-                model_type = config.get("model_type", "mllama")
-
-                # Execute real Apple Silicon Metal fp16 tensor pass over the aerial RGB crop
-                if isinstance(image_source, bytes):
-                    pil_img = Image.open(io.BytesIO(image_source)).convert("RGB")
-                elif isinstance(image_source, Image.Image):
-                    pil_img = image_source.convert("RGB")
-                elif isinstance(image_source, (str, Path)) and Path(image_source).exists():
-                    pil_img = Image.open(image_source).convert("RGB")
-                else:
-                    pil_img = Image.new("RGB", (64, 64), color=(128, 128, 128))
-
-                arr_f32 = np.asarray(pil_img, dtype=np.float32)
-                arr_fp16 = (arr_f32 / 255.0).astype(np.float16)
-                vision_tensor = mx.array(arr_fp16, dtype=mx.float16)
-                # Compute luma/std in float32 to prevent 256x256x3 accumulator overflow (>65,504) in fp16
-                vision_f32 = mx.astype(vision_tensor, mx.float32) * 255.0
-                mean_luma = float(mx.mean(vision_f32).item())
-                contrast_std = float(mx.std(vision_f32).item())
-                if not np.isfinite(mean_luma):
-                    mean_luma = float(np.mean(arr_f32))
-                if not np.isfinite(contrast_std):
-                    contrast_std = float(np.std(arr_f32))
-
-                det_b, det_r, _ = evaluate_deterministic_tier3(telemetry)
-                raw_output = json.dumps(
-                    {
-                        "building_damage_severity": det_b,
-                        "road_damage_severity": det_r,
-                        "visual_cue_summary": (
-                            f"Apple Silicon MLX ({model_type} {quant_bits}-bit fp16) analyzed "
-                            f"{pil_img.size[0]}x{pil_img.size[1]} NOAA aerial patch "
-                            f"(luma={mean_luma:.1f}, texture_std={contrast_std:.1f}): "
-                            f"{telemetry.debris_area_m2:.2f} m² debris leaving "
-                            f"{telemetry.min_clear_width_m:.2f}m clear span."
-                        ),
-                    }
-                )
             else:
+                has_safetensors = any(self.local_mlx_model_path.glob("*.safetensors"))
+                if not has_safetensors:
+                    raise FileNotFoundError(
+                        f"Local MLX safetensors weights not found in {self.local_mlx_model_path}"
+                    )
+                if (
+                    "PYTEST_CURRENT_TEST" in os.environ
+                    and os.environ.get("FIRSTLIGHT_RUN_REAL_MLX_IN_TESTS") != "1"
+                ):
+                    raise RuntimeError(
+                        "Local 11B MLX weight load skipped in fast unit test; falling through to Tier 3 deterministic."
+                    )
+
+                import tempfile
                 from mlx_vlm import generate, load
                 from mlx_vlm.prompt_utils import apply_chat_template
                 from mlx_vlm.utils import load_config
+
+                images_arg: list[str] | None = None
+                if isinstance(image_source, (str, Path)) and Path(image_source).exists():
+                    images_arg = [str(image_source)]
+                elif isinstance(image_source, bytes):
+                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+                        tf.write(image_source)
+                        temp_img_path = Path(tf.name)
+                    images_arg = [str(temp_img_path)]
+                elif isinstance(image_source, Image.Image):
+                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+                        image_source.save(tf, format="PNG")
+                        temp_img_path = Path(tf.name)
+                    images_arg = [str(temp_img_path)]
 
                 config = load_config(str(self.local_mlx_model_path))
                 model, processor = load(str(self.local_mlx_model_path))
@@ -576,9 +568,8 @@ class VLMFailoverRouter:
                     processor,
                     config,
                     prompt,
-                    num_images=1 if image_source is not None else 0,
+                    num_images=len(images_arg) if images_arg else 0,
                 )
-                images_arg = [str(image_source)] if isinstance(image_source, (str, Path)) else None
                 gen_res = generate(
                     model,
                     processor,
@@ -592,9 +583,13 @@ class VLMFailoverRouter:
 
             b_sev, r_sev, cue = parse_vlm_json_response(raw_output, telemetry)
         finally:
+            if temp_img_path is not None and temp_img_path.exists():
+                try:
+                    temp_img_path.unlink()
+                except OSError:
+                    pass
             del model
             del processor
-            del vision_tensor
             mem_info = release_unified_memory()
             memory_cleared = bool(mem_info.get("cleared", False))
 
@@ -632,7 +627,7 @@ class VLMFailoverRouter:
                 tier_used = ConnectivityTier.TIER_1_CLOUD
                 fallback_chain.append("tier_1_cloud:success")
             except Exception as exc:
-                fallback_chain.append(f"tier_1_cloud:error:{type(exc).__name__}")
+                fallback_chain.append(_format_cloud_exception("tier_1_cloud", exc))
 
         # Step 2: Attempt Tier 2 (Local Apple Silicon MLX VLM) if Tier 1 did not succeed
         if b_sev is None and (
@@ -709,7 +704,7 @@ class VLMFailoverRouter:
                 tier_used = ConnectivityTier.TIER_1_CLOUD
                 fallback_chain.append("tier_1_cloud:success")
             except Exception as exc:
-                fallback_chain.append(f"tier_1_cloud:error:{type(exc).__name__}")
+                fallback_chain.append(_format_cloud_exception("tier_1_cloud", exc))
 
         if b_sev is None and (
             force_offline
@@ -803,9 +798,9 @@ class VLMFailoverRouter:
 
 
 class IncidentBriefingResult(BaseModel):
-    """Structured output from `muse-wonder` multi-corridor strategic triage advisor."""
+    """Structured output from `muse-wonder-1.0` multi-corridor strategic triage advisor."""
 
-    model_id: str = "muse-wonder"
+    model_id: str = "muse-wonder-1.0"
     tier_used: ConnectivityTier
     fallback_chain: list[str] = Field(default_factory=list)
     force_offline: bool = False
@@ -820,9 +815,9 @@ class IncidentBriefingResult(BaseModel):
 
 
 class VoiceDispatchResult(BaseModel):
-    """Structured output from `muse-voice-transcribe` tactical hands-free radio dispatch."""
+    """Structured output from `muse-voice-transcribe-1.0` tactical hands-free radio dispatch."""
 
-    model_id: str = "muse-voice-transcribe"
+    model_id: str = "muse-voice-transcribe-1.0"
     tier_used: ConnectivityTier
     fallback_chain: list[str] = Field(default_factory=list)
     force_offline: bool = False
@@ -840,21 +835,28 @@ class MetaModelSuite:
     """
     Unified orchestrator for the full 6-model Meta AI Disaster Response Suite:
       1. `sam-3.1`: Local PyTorch MPS fp16 geometric measurement instrument
-      2. `muse-spark`: Primary visual-language corridor damage & passability grader
-      3. `muse-wonder`: Multi-corridor strategic triage & bulldozer deployment advisor
-      4. `muse-voice-transcribe`: Tactical hands-free radio dispatch transcription & parser
-      5. `muse-image`: Tactical clearance recon schematic generator
+      2. `muse-spark-1.3`: Primary visual-language corridor damage & passability grader
+      3. `muse-wonder-1.0`: Multi-corridor strategic triage & bulldozer deployment advisor
+      4. `muse-voice-transcribe-1.0`: Tactical hands-free radio dispatch transcription & parser
+      5. `muse-image-1.0`: Tactical clearance recon schematic generator
       6. `open-weight-mlx-4bit`: Local Apple Silicon `Llama-3.2-11B-Vision-Instruct-4bit` (`mlx-vlm`)
     """
 
     MODEL_IDS: tuple[str, ...] = (
         "sam-3.1",
-        "muse-spark",
-        "muse-wonder",
-        "muse-voice-transcribe",
-        "muse-image",
+        "muse-spark-1.3",
+        "muse-wonder-1.0",
+        "muse-voice-transcribe-1.0",
+        "muse-image-1.0",
         "open-weight-mlx-4bit",
     )
+
+    MODEL_ALIASES: dict[str, str] = {
+        "muse-spark": "muse-spark-1.3",
+        "muse-wonder": "muse-wonder-1.0",
+        "muse-voice-transcribe": "muse-voice-transcribe-1.0",
+        "muse-image": "muse-image-1.0",
+    }
 
     def __init__(
         self,
@@ -864,6 +866,12 @@ class MetaModelSuite:
     ) -> None:
         self.router = router
         self.sam_checkpoint_path = Path(sam_checkpoint_path)
+        self.last_schematic_meta: dict[str, Any] = {
+            "model_id": "muse-image-1.0",
+            "tier_used": ConnectivityTier.TIER_3_DETERMINISTIC.value,
+            "label": "Deterministic Caliper Overlay (Muse Image Offline)",
+            "fallback_chain": [],
+        }
         self._stats: dict[str, dict[str, Any]] = {
             "sam-3.1": {
                 "role": "Orthogonal 5m Cross-Sectional Geometric Caliper (MPS fp16)",
@@ -871,29 +879,29 @@ class MetaModelSuite:
                 "last_latency_ms": 14.2,
                 "last_tier": "local_mps_fp16",
             },
-            "muse-spark": {
+            "muse-spark-1.3": {
                 "role": "Corridor & Structural Damage Grading VLM",
                 "call_count": 0,
                 "last_latency_ms": 0.0,
-                "last_tier": ConnectivityTier.TIER_2_MLX.value,
+                "last_tier": ConnectivityTier.TIER_3_DETERMINISTIC.value,
             },
-            "muse-wonder": {
+            "muse-wonder-1.0": {
                 "role": "Multi-Corridor Strategic Incident Commander Advisor",
                 "call_count": 0,
                 "last_latency_ms": 0.0,
-                "last_tier": ConnectivityTier.TIER_2_MLX.value,
+                "last_tier": ConnectivityTier.TIER_3_DETERMINISTIC.value,
             },
-            "muse-voice-transcribe": {
+            "muse-voice-transcribe-1.0": {
                 "role": "Tactical Hands-Free Radio Dispatch Transcription",
                 "call_count": 0,
                 "last_latency_ms": 0.0,
-                "last_tier": ConnectivityTier.TIER_2_MLX.value,
+                "last_tier": ConnectivityTier.TIER_3_DETERMINISTIC.value,
             },
-            "muse-image": {
+            "muse-image-1.0": {
                 "role": "Tactical Caliper & SAM 3.1 Recon Schematic Generator",
                 "call_count": 0,
                 "last_latency_ms": 0.0,
-                "last_tier": ConnectivityTier.TIER_2_MLX.value,
+                "last_tier": ConnectivityTier.TIER_3_DETERMINISTIC.value,
             },
             "open-weight-mlx-4bit": {
                 "role": "Edge Air-Gapped Vision-Language Fallback (Llama-3.2-11B-4bit)",
@@ -906,14 +914,15 @@ class MetaModelSuite:
     def record_model_invocation(
         self, model_id: str, latency_ms: float, tier_used: str
     ) -> None:
-        if model_id in self._stats:
-            self._stats[model_id]["call_count"] = (
-                int(self._stats[model_id]["call_count"]) + 1
+        canonical_id = self.MODEL_ALIASES.get(model_id, model_id)
+        if canonical_id in self._stats:
+            self._stats[canonical_id]["call_count"] = (
+                int(self._stats[canonical_id]["call_count"]) + 1
             )
-            self._stats[model_id]["last_latency_ms"] = round(float(latency_ms), 2)
-            self._stats[model_id]["last_tier"] = str(tier_used)
+            self._stats[canonical_id]["last_latency_ms"] = round(float(latency_ms), 2)
+            self._stats[canonical_id]["last_tier"] = str(tier_used)
 
-        if "mlx" in str(tier_used).lower() and model_id != "open-weight-mlx-4bit":
+        if "mlx" in str(tier_used).lower() and canonical_id != "open-weight-mlx-4bit":
             self._stats["open-weight-mlx-4bit"]["call_count"] = (
                 int(self._stats["open-weight-mlx-4bit"]["call_count"]) + 1
             )
@@ -952,6 +961,11 @@ class MetaModelSuite:
                     "ready": ready,
                     "cloud_primary_active": cloud_configured if mid not in ("sam-3.1", "open-weight-mlx-4bit") else False,
                     "offline_fallback_ready": True,
+                    "fallback_label": (
+                        "Deterministic Caliper Overlay (Muse Image Offline)"
+                        if mid == "muse-image-1.0" and not cloud_configured
+                        else None
+                    ),
                     "call_count": st["call_count"],
                     "last_latency_ms": st["last_latency_ms"],
                     "last_tier": st["last_tier"],
@@ -963,6 +977,11 @@ class MetaModelSuite:
             "api_base_url": self.router.api_base_url,
             "cloud_timeout_s": self.router.cloud_timeout_s,
             "force_offline": force_offline,
+            "schematic_label": (
+                "Muse Image 1.0 Recon Schematic"
+                if cloud_configured
+                else "Deterministic Caliper Overlay (Muse Image Offline)"
+            ),
             "total_models": len(models_payload),
             "models": models_payload,
         }
@@ -977,9 +996,9 @@ class MetaModelSuite:
         async_client: httpx.AsyncClient | None = None,
     ) -> IncidentBriefingResult:
         """
-        Invoke `muse-wonder` (`https://api.meta.ai/v1/chat/completions`) to synthesize a
+        Invoke `muse-wonder-1.0` (`https://api.meta.ai/v1/chat/completions`) to synthesize a
         multi-corridor Incident Commander Action Plan prioritizing heavy debris clearance
-        equipment across Mexico Beach sectors, with automatic edge/deterministic failover.
+        equipment across Mexico Beach sectors, with strict deterministic geometric fallback.
         """
         t0 = time.perf_counter()
         fallback_chain: list[str] = []
@@ -1041,7 +1060,7 @@ class MetaModelSuite:
                     "Provide a concise 2-sentence executive action plan grounded in these exact numbers."
                 )
                 payload = {
-                    "model": "muse-wonder",
+                    "model": "muse-wonder-1.0",
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.0,
                     "max_tokens": 180,
@@ -1062,22 +1081,18 @@ class MetaModelSuite:
                 tier_used = ConnectivityTier.TIER_1_CLOUD
                 fallback_chain.append("tier_1_cloud_muse_wonder:success")
             except Exception as exc:
-                fallback_chain.append(f"tier_1_cloud_muse_wonder:error:{type(exc).__name__}")
+                fallback_chain.append(_format_cloud_exception("tier_1_cloud_muse_wonder", exc))
         else:
             fallback_chain.append("tier_1_cloud_muse_wonder:error:MissingApiKey")
 
         if cloud_summary is None:
-            if (self.router.local_mlx_model_path / "config.json").exists():
-                tier_used = ConnectivityTier.TIER_2_MLX
-                fallback_chain.append("tier_2_mlx_advisor:success")
-            else:
-                tier_used = ConnectivityTier.TIER_3_DETERMINISTIC
-                fallback_chain.append("tier_3_deterministic_advisor:success")
+            tier_used = ConnectivityTier.TIER_3_DETERMINISTIC
+            fallback_chain.append("tier_3_deterministic_briefing")
 
             if sector_priorities:
                 p1 = sector_priorities[0]
                 cloud_summary = (
-                    f"[MUSE-WONDER STRATEGIC PLAN] Prioritize Stage-1 clearance on {p1['road_name']} "
+                    f"[DETERMINISTIC GEOMETRIC TRIAGE — NO LLM EXECUTED] Prioritize Stage-1 clearance on {p1['road_name']} "
                     f"({p1['debris_area_sqm']:.2f} m² debris, widening {p1['span_widening_m']} at {gsd_m_per_px:.4f} m/px GSD) "
                     f"to immediately unlock {p1['high_severity_structures_unlocked']} high-severity structures "
                     f"(top ROI: {p1['clearance_roi']:.4f} structures/m²). "
@@ -1086,16 +1101,16 @@ class MetaModelSuite:
                 )
             else:
                 cloud_summary = (
-                    f"[MUSE-WONDER STRATEGIC PLAN] All primary corridors in Mexico Beach meet "
+                    f"[DETERMINISTIC GEOMETRIC TRIAGE — NO LLM EXECUTED] All primary corridors in Mexico Beach meet "
                     f"{vehicle_class.upper()} clearance thresholds at {gsd_m_per_px:.4f} m/px GSD."
                 )
 
         mem_info = release_unified_memory()
         latency_ms = (time.perf_counter() - t0) * 1000.0
-        self.record_model_invocation("muse-wonder", latency_ms, tier_used.value)
+        self.record_model_invocation("muse-wonder-1.0", latency_ms, tier_used.value)
 
         return IncidentBriefingResult(
-            model_id="muse-wonder",
+            model_id="muse-wonder-1.0",
             tier_used=tier_used,
             fallback_chain=fallback_chain,
             force_offline=force_offline,
@@ -1120,9 +1135,8 @@ class MetaModelSuite:
         async_client: httpx.AsyncClient | None = None,
     ) -> VoiceDispatchResult:
         """
-        Invoke `muse-voice-transcribe` (`https://api.meta.ai/v1/audio/transcriptions` or
-        chat endpoint) to transcribe field radio commands and parse them into structured
-        routing & choke-point clearance actions.
+        Invoke `muse-voice-transcribe-1.0` (`https://api.meta.ai/v1/chat/completions`) to
+        transcribe field radio commands and parse them into structured routing & clearance actions.
         """
         t0 = time.perf_counter()
         fallback_chain: list[str] = []
@@ -1140,7 +1154,7 @@ class MetaModelSuite:
         elif self.router.api_key:
             try:
                 payload = {
-                    "model": "muse-voice-transcribe",
+                    "model": "muse-voice-transcribe-1.0",
                     "messages": [
                         {
                             "role": "user",
@@ -1169,18 +1183,14 @@ class MetaModelSuite:
                 tier_used = ConnectivityTier.TIER_1_CLOUD
                 fallback_chain.append("tier_1_cloud_muse_voice:success")
             except Exception as exc:
-                fallback_chain.append(f"tier_1_cloud_muse_voice:error:{type(exc).__name__}")
+                fallback_chain.append(_format_cloud_exception("tier_1_cloud_muse_voice", exc))
         else:
             fallback_chain.append("tier_1_cloud_muse_voice:error:MissingApiKey")
 
         if transcript is None:
             transcript = default_transcript
-            if (self.router.local_mlx_model_path / "config.json").exists():
-                tier_used = ConnectivityTier.TIER_2_MLX
-                fallback_chain.append("tier_2_mlx_voice_parser:success")
-            else:
-                tier_used = ConnectivityTier.TIER_3_DETERMINISTIC
-                fallback_chain.append("tier_3_deterministic_voice_parser:success")
+            tier_used = ConnectivityTier.TIER_3_DETERMINISTIC
+            fallback_chain.append("tier_3_deterministic_voice_parser")
 
         lower_text = transcript.lower()
         if "atv" in lower_text or "foot" in lower_text:
@@ -1197,10 +1207,15 @@ class MetaModelSuite:
 
         mem_info = release_unified_memory()
         latency_ms = (time.perf_counter() - t0) * 1000.0
-        self.record_model_invocation("muse-voice-transcribe", latency_ms, tier_used.value)
+        self.record_model_invocation("muse-voice-transcribe-1.0", latency_ms, tier_used.value)
 
+        provenance_prefix = (
+            "[MUSE-VOICE-1.0 CLOUD ASR]"
+            if tier_used == ConnectivityTier.TIER_1_CLOUD
+            else "[DETERMINISTIC REGEX DISPATCH — NO ASR MODEL EXECUTED]"
+        )
         action_summary = (
-            f"Voice Dispatch Executed: Switched active vehicle to {parsed_vc.upper()}"
+            f"{provenance_prefix} Switched active vehicle to {parsed_vc.upper()}"
             + (
                 f", simulated debris clearance on choke point {clear_edge} ({top_road_name}), and recomputed shortest route."
                 if clear_edge
@@ -1209,7 +1224,7 @@ class MetaModelSuite:
         )
 
         return VoiceDispatchResult(
-            model_id="muse-voice-transcribe",
+            model_id="muse-voice-transcribe-1.0",
             tier_used=tier_used,
             fallback_chain=fallback_chain,
             force_offline=force_offline,
@@ -1238,19 +1253,21 @@ class MetaModelSuite:
         http_client: httpx.Client | None = None,
     ) -> bytes:
         """
-        Invoke `muse-image` when online (or synthesize a high-contrast 256x256 tactical
-        SAM 3.1 + 5m orthogonal caliper schematic overlay using Pillow/Rasterio when
-        offline/air-gapped) for inclusion in field crew manifests.
+        Invoke `muse-image-1.0` when online (or synthesize a high-contrast 256x256
+        Deterministic Caliper Overlay using Pillow/Rasterio when offline/air-gapped).
         """
         from PIL import ImageDraw
 
         t0 = time.perf_counter()
         tier_used = ConnectivityTier.TIER_3_DETERMINISTIC
+        fallback_chain: list[str] = []
 
-        if not force_offline and self.router.api_key:
+        if force_offline:
+            fallback_chain.append("tier_1_cloud_muse_image:bypassed:force_offline")
+        elif self.router.api_key:
             try:
                 payload = {
-                    "model": "muse-image",
+                    "model": "muse-image-1.0",
                     "prompt": (
                         f"Tactical disaster reconnaissance schematic for {road_name} (edge {edge_id}): "
                         f"min clear width {min_clear_width_m:.2f}m of {nominal_width_m:.1f}m corridor, "
@@ -1275,15 +1292,30 @@ class MetaModelSuite:
                 raw_png = base64.b64decode(b64_data)
                 if raw_png[:8] == b"\x89PNG\r\n\x1a\n":
                     latency_ms = (time.perf_counter() - t0) * 1000.0
+                    fallback_chain.append("tier_1_cloud_muse_image:success")
+                    self.last_schematic_meta = {
+                        "model_id": "muse-image-1.0",
+                        "tier_used": ConnectivityTier.TIER_1_CLOUD.value,
+                        "label": "Muse Image 1.0 Recon Schematic",
+                        "fallback_chain": fallback_chain,
+                    }
                     self.record_model_invocation(
-                        "muse-image", latency_ms, ConnectivityTier.TIER_1_CLOUD.value
+                        "muse-image-1.0", latency_ms, ConnectivityTier.TIER_1_CLOUD.value
                     )
                     return raw_png
-            except Exception:
-                pass
+            except Exception as exc:
+                fallback_chain.append(_format_cloud_exception("tier_1_cloud_muse_image", exc))
+        else:
+            fallback_chain.append("tier_1_cloud_muse_image:error:MissingApiKey")
 
-        if (self.router.local_mlx_model_path / "config.json").exists():
-            tier_used = ConnectivityTier.TIER_2_MLX
+        tier_used = ConnectivityTier.TIER_3_DETERMINISTIC
+        fallback_chain.append("tier_3_deterministic_caliper_overlay")
+        self.last_schematic_meta = {
+            "model_id": "muse-image-1.0",
+            "tier_used": tier_used.value,
+            "label": "Deterministic Caliper Overlay (Muse Image Offline)",
+            "fallback_chain": fallback_chain,
+        }
 
         base_img = Image.open(io.BytesIO(crop_png_bytes)).convert("RGBA")
         if base_img.size != (256, 256):
@@ -1359,11 +1391,11 @@ class MetaModelSuite:
                     width=2,
                 )
 
-        # 5. Top & Bottom Tactical Telemetry HUD Bars
+        # 5. Top & Bottom Tactical Telemetry HUD Bars (Honest Deterministic Attribution)
         draw.rectangle([0, 0, 256, 24], fill=(11, 17, 32, 225))
         draw.text(
             (6, 6),
-            f"MUSE-IMAGE + SAM3.1 | {road_name[:18]}",
+            f"DETERMINISTIC CALIPER OVERLAY | {road_name[:12]}",
             fill=(56, 189, 248, 255),
         )
 
@@ -1384,6 +1416,6 @@ class MetaModelSuite:
         composed.save(buf, format="PNG", optimize=True)
 
         latency_ms = (time.perf_counter() - t0) * 1000.0
-        self.record_model_invocation("muse-image", latency_ms, tier_used.value)
+        self.record_model_invocation("muse-image-1.0", latency_ms, tier_used.value)
         return buf.getvalue()
 

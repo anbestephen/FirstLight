@@ -159,7 +159,6 @@ class FirstLightState:
         self.router = VLMFailoverRouter(
             local_mlx_model_path=MODELS_DIR / "Llama-3.2-11B-Vision-Instruct-4bit",
             mode=FailoverMode.AUTO,
-            fast_edge_inference=True,
         )
         self.meta_suite = MetaModelSuite(
             self.router,
@@ -819,7 +818,11 @@ def get_choke_point_recon_schematic_png(
         gsd_m_per_px=float(edata.get("gsd_m_per_px", state.raster_meta["gsd_m_per_px"])),
         force_offline=force_offline,
     )
-    return Response(content=schematic_bytes, media_type="image/png")
+    meta_headers = {
+        "X-Schematic-Label": str(state.meta_suite.last_schematic_meta.get("label", "Deterministic Caliper Overlay (Muse Image Offline)")),
+        "X-Tier-Used": str(state.meta_suite.last_schematic_meta.get("tier_used", ConnectivityTier.TIER_3_DETERMINISTIC.value)),
+    }
+    return Response(content=schematic_bytes, media_type="image/png", headers=meta_headers)
 
 
 @app.get("/api/meta-models")
@@ -992,7 +995,7 @@ async def post_assess(req: AssessRequest) -> dict[str, Any]:
         state.router.mode = prev_mode
 
     state.meta_suite.record_model_invocation(
-        "muse-spark", assessment.latency_ms, assessment.tier_used.value
+        "muse-spark-1.3", assessment.latency_ms, assessment.tier_used.value
     )
     mem_stats = release_unified_memory()
     payload = assessment.model_dump()
@@ -1005,6 +1008,11 @@ async def post_assess(req: AssessRequest) -> dict[str, Any]:
         f"/api/choke-point/{resolved_edge_id}/recon-schematic.png"
         if resolved_edge_id
         else None
+    )
+    payload["schematic_label"] = (
+        "Muse Image 1.0 Recon Schematic"
+        if (bool(state.router.api_key) and not req.force_offline)
+        else "Deterministic Caliper Overlay (Muse Image Offline)"
     )
     payload["memory_cleared"] = True
     payload["unified_memory_stats"] = mem_stats
@@ -1117,7 +1125,7 @@ async def post_benchmark_tiers(req: BenchmarkTiersRequest) -> dict[str, Any]:
         {
             "tier_id": ConnectivityTier.TIER_1_CLOUD.value,
             "tier_label": "Tier 1: Meta Cloud API",
-            "model_id": "muse-spark + sam-3.1",
+            "model_id": "muse-spark-1.3 + sam-3.1",
             "tier_status": t1_status,
             "latency_ms": t1_latency_ms,
             "damage_severity": t1_r_sev,
@@ -1133,7 +1141,7 @@ async def post_benchmark_tiers(req: BenchmarkTiersRequest) -> dict[str, Any]:
             "tier_status": (
                 "edge_mlx_active"
                 if t2_res.tier_used == ConnectivityTier.TIER_2_MLX
-                else "edge_fallback_active"
+                else "deterministic_fallback"
             ),
             "latency_ms": round(float(t2_res.latency_ms), 3),
             "damage_severity": t2_res.road_damage_severity,

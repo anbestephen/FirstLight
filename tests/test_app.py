@@ -310,14 +310,14 @@ def test_milestone6_meta_models_briefing_voice_and_schematic_endpoints() -> None
         returned_ids = [m["model_id"] for m in m_data["models"]]
         assert returned_ids == [
             "sam-3.1",
-            "muse-spark",
-            "muse-wonder",
-            "muse-voice-transcribe",
-            "muse-image",
+            "muse-spark-1.3",
+            "muse-wonder-1.0",
+            "muse-voice-transcribe-1.0",
+            "muse-image-1.0",
             "open-weight-mlx-4bit",
         ]
 
-    # 2. POST /api/incident-briefing (muse-wonder)
+    # 2. POST /api/incident-briefing (muse-wonder-1.0)
     for offline_flag in (False, True):
         b_res = client.post(
             "/api/incident-briefing",
@@ -329,13 +329,16 @@ def test_milestone6_meta_models_briefing_voice_and_schematic_endpoints() -> None
         )
         assert b_res.status_code == 200
         b_data = b_res.json()
-        assert b_data["model_id"] == "muse-wonder"
+        assert b_data["model_id"] == "muse-wonder-1.0"
         assert b_data["force_offline"] is offline_flag
         assert len(b_data["sector_priorities"]) > 0
         assert len(b_data["executive_summary"]) > 20
+        assert "[MUSE-WONDER STRATEGIC PLAN]" not in b_data["executive_summary"]
+        if offline_flag:
+            assert "[DETERMINISTIC GEOMETRIC TRIAGE — NO LLM EXECUTED]" in b_data["executive_summary"]
         assert b_data["memory_cleared"] is True
 
-    # 3. POST /api/voice-dispatch (muse-voice-transcribe)
+    # 3. POST /api/voice-dispatch (muse-voice-transcribe-1.0)
     for offline_flag in (False, True):
         v_res = client.post(
             "/api/voice-dispatch",
@@ -347,13 +350,13 @@ def test_milestone6_meta_models_briefing_voice_and_schematic_endpoints() -> None
         )
         assert v_res.status_code == 200
         v_data = v_res.json()
-        assert v_data["model_id"] == "muse-voice-transcribe"
+        assert v_data["model_id"] == "muse-voice-transcribe-1.0"
         assert v_data["force_offline"] is offline_flag
         assert v_data["vehicle_class"] == "fire_engine"
         assert v_data["simulate_clear_edge_id"] is not None
         assert v_data["trigger_route"] is True
 
-    # 4. GET /api/choke-point/{edge_id}/recon-schematic.png (muse-image)
+    # 4. GET /api/choke-point/{edge_id}/recon-schematic.png (muse-image-1.0)
     roi_res = client.get("/api/clearance-roi?vehicle_class=fire_engine")
     top_rec = roi_res.json()["recommendations"][0]
     edge_id = f"{top_rec['edge_u']}-{top_rec['edge_v']}-{top_rec['edge_key']}"
@@ -364,6 +367,11 @@ def test_milestone6_meta_models_briefing_voice_and_schematic_endpoints() -> None
         )
         assert s_res.status_code == 200
         assert s_res.headers["content-type"] == "image/png"
+        if offline_flag:
+            assert (
+                s_res.headers.get("x-schematic-label")
+                == "Deterministic Caliper Overlay (Muse Image Offline)"
+            )
         assert s_res.content[:8] == b"\x89PNG\r\n\x1a\n"
         img = Image.open(io.BytesIO(s_res.content))
         assert img.size == (256, 256)

@@ -20,6 +20,7 @@
     lastRoiRecommendations: [],
     activeEdgeId: null,
     inspectorViewMode: "crop", // "crop" | "schematic"
+    schematicLabel: "Deterministic Caliper Overlay (Muse Image Offline)",
     highlightedUnlockedNodes: [],
     lastCaliperGeojson: null,
     boundsWgs84: [-85.4251, 29.9249, -85.3999, 29.9501],
@@ -286,7 +287,8 @@
     if (state.inspectorViewMode === "schematic") {
       cropImg.src = `/api/choke-point/${encodedId}/recon-schematic.png?force_offline=${Boolean(state.forceOffline)}`;
       if (captionEl) {
-        captionEl.textContent = "Muse Image + SAM 3.1 Recon Schematic";
+        captionEl.textContent =
+          state.schematicLabel || "Deterministic Caliper Overlay (Muse Image Offline)";
       }
     } else {
       cropImg.src = `/api/choke-point/${encodedId}/crop.png`;
@@ -900,13 +902,22 @@
       const res = await fetch(`/api/meta-models?force_offline=${Boolean(state.forceOffline)}`);
       if (!res.ok) return;
       const data = await res.json();
+      if (data.schematic_label) {
+        state.schematicLabel = data.schematic_label;
+        const btnSchematic = document.getElementById("btn-view-schematic");
+        if (btnSchematic) {
+          btnSchematic.textContent = data.schematic_label;
+        }
+      }
       (data.models || []).forEach(function (m) {
         const chip = document.querySelector(`.meta-model-chip[data-model="${m.model_id}"]`);
         if (!chip) return;
-        chip.classList.toggle("edge-mode", Boolean(state.forceOffline));
+        chip.classList.toggle("edge-mode", !m.cloud_primary_active);
         const subEl = chip.querySelector(".chip-sub");
         if (subEl) {
-          subEl.textContent = `${m.call_count}x (${m.last_latency_ms}ms)`;
+          subEl.textContent = m.fallback_label
+            ? m.fallback_label
+            : `${m.call_count}x (${m.last_latency_ms}ms)`;
         }
         chip.title = `${m.role} | Provider: ${m.provider} | Calls: ${m.call_count}`;
       });
@@ -919,7 +930,7 @@
     const boxEl = document.getElementById("wonder-briefing-box");
     if (!boxEl) return;
     boxEl.classList.remove("hidden");
-    boxEl.innerHTML = "Synthesizing Muse Wonder multi-corridor strategic triage plan...";
+    boxEl.innerHTML = "Computing multi-corridor strategic triage plan...";
 
     const res = await fetch("/api/incident-briefing", {
       method: "POST",
@@ -938,8 +949,13 @@
       })
       .join("");
 
+    const headerLabel =
+      String(data.tier_used).includes("tier_1")
+        ? "Muse Wonder 1.0 Cloud Action Plan"
+        : "Deterministic Geometric Triage (No LLM Executed)";
+
     boxEl.innerHTML = `
-      <div><strong>Muse Wonder Action Plan (${formatTierLabel(data.tier_used)} &bull; ${data.latency_ms} ms):</strong></div>
+      <div><strong>${headerLabel} (${formatTierLabel(data.tier_used)} &bull; ${data.latency_ms} ms):</strong></div>
       <div>${data.executive_summary}</div>
       ${sectorsHtml}
     `;
