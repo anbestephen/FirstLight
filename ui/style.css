@@ -190,6 +190,24 @@ html, body {
   color: #cbd5e1;
 }
 
+.pill-field {
+  color: var(--text-muted);
+}
+
+.pill-field.live {
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+}
+
+.pill-field .status-dot {
+  background: var(--text-muted);
+}
+
+.pill-field.live .status-dot {
+  background: var(--accent-green);
+  box-shadow: 0 0 6px var(--accent-green);
+}
+
 .status-dot {
   width: 8px;
   height: 8px;

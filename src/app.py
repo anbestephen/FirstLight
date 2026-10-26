@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import io
 import math
+import os
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import geopandas as gpd
 import networkx as nx
@@ -28,6 +29,7 @@ from rasterio.enums import Resampling
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, mapping
 from shapely.ops import transform as shapely_transform
 
+from src.dispatch import DispatchAssignment, DispatchHub, detect_lan_ip, probe_tcp_uplink
 from src.failover import (
     ConnectivityTier,
     FailoverMode,
@@ -48,6 +50,7 @@ from src.geometry import (
 )
 from src.routing import (
     VEHICLE_MIN_WIDTH_M,
+    _format_edge_name,
     assign_buildings_to_graph_nodes,
     compute_multi_class_routes,
     compute_shortest_route,
@@ -148,6 +151,15 @@ class BenchmarkTiersRequest(BaseModel):
     force_offline: bool = False
 
 
+class DispatchRequest(BaseModel):
+    """Request payload for `POST /api/dispatch` (commander -> field devices)."""
+
+    vehicle_class: str | None = None
+    origin: list[float] | None = None
+    destination: list[float] | None = None
+    force_offline: bool | None = None
+
+
 class FirstLightState:
     """In-memory state manager holding the annotated road graph, masks, layers, and failover router."""
 
@@ -167,6 +179,26 @@ class FirstLightState:
         self.meta_suite = MetaModelSuite(
             self.router,
             sam_checkpoint_path=MODELS_DIR / "sam3.1" / "model.safetensors",
+        )
+        self.dispatch = DispatchHub(
+            uplink_probe=(
+                None if os.environ.get("FIRSTLIGHT_UPLINK_PROBE", "1") == "0" else probe_tcp_uplink
+            )
+        )
+
+    def default_route_endpoints(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        """Return the default `(origin, destination)` lon/lat pair: westernmost and easternmost nodes."""
+        self.ensure_loaded()
+        assert self.active_graph is not None
+        nodes_sorted = sorted(
+            self.active_graph.nodes(data=True),
+            key=lambda item: float(item[1].get("x", 0.0)),
+        )
+        o_data = nodes_sorted[0][1]
+        d_data = nodes_sorted[-1][1]
+        return (
+            (float(o_data.get("x", 0.0)), float(o_data.get("y", 0.0))),
+            (float(d_data.get("x", 0.0)), float(d_data.get("y", 0.0))),
         )
 
     def ensure_loaded(self) -> None:
@@ -601,6 +633,176 @@ def serve_dashboard_css() -> FileResponse:
     return FileResponse(css_path, media_type="text/css")
 
 
+@app.get("/field", include_in_schema=False)
+def serve_field_view() -> FileResponse:
+    field_path = UI_DIR / "field.html"
+    if not field_path.exists():
+        raise HTTPException(status_code=404, detail="ui/field.html not found")
+    return FileResponse(field_path, media_type="text/html")
+
+
+@app.get("/field.js", include_in_schema=False)
+def serve_field_js() -> FileResponse:
+    js_path = UI_DIR / "field.js"
+    if not js_path.exists():
+        raise HTTPException(status_code=404, detail="ui/field.js not found")
+    return FileResponse(js_path, media_type="application/javascript")
+
+
+@app.get("/field.css", include_in_schema=False)
+def serve_field_css() -> FileResponse:
+    css_path = UI_DIR / "field.css"
+    if not css_path.exists():
+        raise HTTPException(status_code=404, detail="ui/field.css not found")
+    return FileResponse(css_path, media_type="text/css")
+
+
+def _field_road_label(name: str) -> str:
+    """Plain-language road name for responders (OSM segments without a name)."""
+    return "unnamed road" if name.startswith("Segment ") else name
+
+
+def _merge_field_steps(edge_steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse consecutive route segments on the same road into one spoken-style instruction."""
+    merged: list[dict[str, Any]] = []
+    for step in edge_steps:
+        label = _field_road_label(str(step.get("name", "")))
+        if merged and merged[-1]["road"] == label:
+            merged[-1]["length_m"] += float(step.get("length_m", 0.0))
+            merged[-1]["travel_time_s"] += float(step.get("travel_time_s", 0.0))
+            merged[-1]["min_clear_width_m"] = min(
+                merged[-1]["min_clear_width_m"], float(step.get("min_clear_width_m", 0.0))
+            )
+            merged[-1]["needs_drone_recon"] = merged[-1]["needs_drone_recon"] or bool(
+                step.get("needs_drone_recon", False)
+            )
+            continue
+        merged.append(
+            {
+                "road": label,
+                "length_m": float(step.get("length_m", 0.0)),
+                "travel_time_s": float(step.get("travel_time_s", 0.0)),
+                "min_clear_width_m": float(step.get("min_clear_width_m", 0.0)),
+                "needs_drone_recon": bool(step.get("needs_drone_recon", False)),
+            }
+        )
+    for item in merged:
+        item["length_m"] = round(item["length_m"], 1)
+        item["travel_time_s"] = round(item["travel_time_s"], 1)
+        item["min_clear_width_m"] = round(item["min_clear_width_m"], 2)
+        item["instruction"] = f"Continue {item['length_m']:.0f} m on {item['road']}"
+    return merged
+
+
+def _build_dispatch_snapshot(assignment: DispatchAssignment) -> dict[str, Any]:
+    """Compute the route and road passability a field device needs for `assignment`."""
+    state.ensure_loaded()
+    assert state.active_graph is not None
+    G = state.active_graph
+    vc = normalize_vehicle_class(assignment.vehicle_class)
+
+    default_origin, default_destination = state.default_route_endpoints()
+    origin = assignment.origin_lonlat or default_origin
+    destination = assignment.destination_lonlat or default_destination
+
+    route = compute_shortest_route(
+        G,
+        origin=find_nearest_node(G, origin[0], origin[1]),
+        destination=find_nearest_node(G, destination[0], destination[1]),
+        vehicle_class=vc,
+    )
+    route_dict = route.to_dict()
+
+    pass_attr = f"passable_{vc}"
+    impassable_edge_ids: list[str] = []
+    water_edge_ids: list[str] = []
+    for u, v, k, data in G.edges(keys=True, data=True):
+        edge_id = f"{u}-{v}-{int(k)}"
+        if bool(data.get("has_water_obstruction", False)) or float(
+            data.get("water_overlap_ratio", 0.0)
+        ) > 0.0:
+            water_edge_ids.append(edge_id)
+        elif not bool(data.get(pass_attr, True)):
+            impassable_edge_ids.append(edge_id)
+
+    lan_ip = detect_lan_ip()
+    return {
+        "vehicle_class": vc,
+        "required_width_m": VEHICLE_MIN_WIDTH_M[vc],
+        "origin": list(origin),
+        "destination": list(destination),
+        "route": {
+            "reachable": route_dict["reachable"],
+            "total_distance_m": route_dict["total_distance_m"],
+            "estimated_transit_time_s": route_dict["estimated_transit_time_s"],
+            "coordinates": route_dict["geojson_geometry"].get("coordinates", []),
+            "blocked_segments_avoided": len(route_dict["blocked_edges_avoided"]),
+            "rationale": route_dict["rationale"],
+            "steps": _merge_field_steps(route_dict["edge_steps"]),
+        },
+        "impassable_edge_ids": impassable_edge_ids,
+        "water_edge_ids": water_edge_ids,
+        "cleared_edges": [{"u": u, "v": v, "key": k} for u, v, k in state.cleared_edges],
+        "field_url": f"http://{lan_ip}:8000/field" if lan_ip else None,
+    }
+
+
+@app.get("/api/dispatch")
+def get_dispatch() -> dict[str, Any]:
+    """Return the current field assignment snapshot (route, passability, connectivity)."""
+    return state.dispatch.get_snapshot(_build_dispatch_snapshot)
+
+
+@app.post("/api/dispatch")
+def post_dispatch(req: DispatchRequest) -> dict[str, Any]:
+    """
+    Update the active field assignment from the commander dashboard. Every connected field
+    device receives the recomputed route over `GET /api/dispatch/stream` within ~250 ms.
+    """
+    vc: str | None = None
+    if req.vehicle_class is not None:
+        try:
+            vc = normalize_vehicle_class(req.vehicle_class)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    for label, pt in (("origin", req.origin), ("destination", req.destination)):
+        if pt is not None and len(pt) < 2:
+            raise HTTPException(status_code=400, detail=f"{label} must be [lon, lat].")
+
+    state.dispatch.update_assignment(
+        vehicle_class=vc,
+        origin_lonlat=(float(req.origin[0]), float(req.origin[1])) if req.origin else None,
+        destination_lonlat=(
+            (float(req.destination[0]), float(req.destination[1])) if req.destination else None
+        ),
+        force_offline=req.force_offline,
+    )
+    return state.dispatch.get_snapshot(_build_dispatch_snapshot)
+
+
+@app.get("/api/dispatch/stream")
+async def stream_dispatch(
+    request: Request,
+    role: Literal["field", "command"] = Query(default="field"),
+    limit: int | None = Query(default=None, ge=1),
+) -> StreamingResponse:
+    """
+    Server-Sent Events stream of dispatch snapshots for field devices on the local Wi-Fi.
+    Pushes on assignment changes, debris clearances, and internet uplink loss/restore.
+    """
+    state.ensure_loaded()
+    return StreamingResponse(
+        state.dispatch.stream(
+            _build_dispatch_snapshot,
+            role=role,
+            is_disconnected=request.is_disconnected,
+            limit=limit,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/api/health")
 def get_health() -> dict[str, Any]:
     """Report system status, active VLM tier readiness, and Apple Silicon MPS/MLX device health."""
@@ -946,9 +1148,13 @@ async def post_voice_dispatch(req: VoiceDispatchRequest) -> dict[str, Any]:
     )
 
     if req.auto_apply_clearance and result.simulate_clear_edge_id:
-        u, v, k, _ = state.resolve_edge_by_id(result.simulate_clear_edge_id)
+        u, v, k, edata = state.resolve_edge_by_id(result.simulate_clear_edge_id)
         if not state.is_edge_currently_cleared(u, v, k):
             state.toggle_clear_edge(u, v, k)
+            state.dispatch.bump(
+                "debris_cleared",
+                _field_road_label(_format_edge_name(edata.get("name"), u, v)),
+            )
 
     return result.model_dump()
 
@@ -1314,8 +1520,19 @@ def post_simulate_clear(req: SimulateClearRequest) -> dict[str, Any]:
     """
     if req.reset:
         state.reset_clearances()
+        state.dispatch.bump("clearances_reset")
     elif req.edge_u is not None and req.edge_v is not None:
         state.toggle_clear_edge(req.edge_u, req.edge_v, req.edge_key)
+        assert state.base_graph is not None
+        u_id = state._resolve_node_id(state.base_graph, req.edge_u)
+        v_id = state._resolve_node_id(state.base_graph, req.edge_v)
+        now_cleared = state.is_edge_currently_cleared(u_id, v_id, req.edge_key)
+        road_label = ""
+        if state.base_graph.has_edge(u_id, v_id, req.edge_key):
+            road_label = _field_road_label(
+                _format_edge_name(state.base_graph[u_id][v_id][req.edge_key].get("name"), u_id, v_id)
+            )
+        state.dispatch.bump("debris_cleared" if now_cleared else "clearance_undone", road_label)
     else:
         raise HTTPException(
             status_code=400,

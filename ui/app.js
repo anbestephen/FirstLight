@@ -516,6 +516,55 @@
     renderRouteOnMap(routeData);
     renderRouteBanner(routeData);
     renderTurnByTurnSteps(routeData.edge_steps || []);
+    pushFieldDispatch({
+      vehicle_class: state.vehicleClass,
+      origin: payload.origin,
+      destination: payload.destination,
+    });
+  }
+
+  /**
+   * Push the commander's current assignment to field devices (`POST /api/dispatch`).
+   * The server only re-broadcasts when something actually changed.
+   */
+  async function pushFieldDispatch(update) {
+    try {
+      await fetch("/api/dispatch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(update),
+      });
+    } catch (err) {
+      // Field sync is best-effort; the commander view keeps working without it.
+    }
+  }
+
+  /**
+   * Follow the dispatch stream as a `command` client to show how many field devices are
+   * live and which URL they should open.
+   */
+  function connectFieldLinkStatus() {
+    if (!window.EventSource) return;
+    const pill = document.getElementById("field-link-pill");
+    const textEl = document.getElementById("field-link-text");
+    const source = new EventSource("/api/dispatch/stream?role=command");
+    source.addEventListener("dispatch", function (ev) {
+      let snapshot;
+      try {
+        snapshot = JSON.parse(ev.data);
+      } catch (err) {
+        return;
+      }
+      const count = (snapshot.connectivity && snapshot.connectivity.field_clients) || 0;
+      pill.classList.toggle("live", count > 0);
+      textEl.textContent = `FIELD LINK: ${count} DEVICE${count === 1 ? "" : "S"}`;
+      pill.title = snapshot.field_url
+        ? `Open ${snapshot.field_url} on a phone on this Wi-Fi`
+        : "Field view: /field on this laptop's LAN address";
+    });
+    source.addEventListener("error", function () {
+      pill.classList.remove("live");
+    });
   }
 
   function renderRouteOnMap(routeData) {
@@ -1110,6 +1159,7 @@
       if (netText) {
         netText.textContent = "COMMS BLACKOUT (EDGE ONLY)";
       }
+      pushFieldDispatch({ force_offline: true });
       const targetEdge = state.activeEdgeId || "0";
       await Promise.all([
         runVlmAssessmentForEdge(targetEdge),
@@ -1158,6 +1208,7 @@
         dot.classList.add("online");
         netText.textContent = "LOCAL WI-FI / OFFLINE READY";
       }
+      pushFieldDispatch({ force_offline: state.forceOffline });
       if (state.activeEdgeId) {
         await runVlmAssessmentForEdge(state.activeEdgeId);
       }
@@ -1268,6 +1319,7 @@
   document.addEventListener("DOMContentLoaded", async function () {
     initMap();
     bindUiEvents();
+    connectFieldLinkStatus();
     await fetchHealth();
     await loadInitialLayers();
     await Promise.all([refreshRoute(), refreshClearanceRoi(), refreshMetaModelsTelemetry()]);
