@@ -132,3 +132,20 @@ All 5 phases (Phase 0 through Milestone 4) have been implemented and verified:
 6. **End-to-End Verification ([test_failover.py](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/tests/test_failover.py), [test_app.py](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/tests/test_app.py)):**
    - **40/40 pytest tests passing** across `test_geometry.py`, `test_failover.py`, `test_routing.py`, and `test_app.py` with zero external CDN dependencies.
 
+---
+
+## Milestone 7: Demo Video Visual Storytelling Enhancements
+
+### Implemented Features & Endpoints
+1. **Cross-Section Caliper Threshold Gauge ([index.html](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/ui/index.html#L225-L254), [app.js](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/ui/app.js#L285-L319), [style.css](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/ui/style.css#L928-L1038)):**
+   - Renders a visual horizontal gauge inside the Corridor AI Inspector Dock showing the road's measured `min_clear_width_m` against explicit vertical threshold markers for `ATV (1.2m)`, `Ambulance (2.2m)`, and `Fire Engine (3.5m)`, alongside color-coded `PASS` (green) or `BLOCKED` (red) vehicle badges.
+2. **Side-by-Side 3-Tier Failover Benchmark (`POST /api/benchmark-tiers` — [app.py](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/src/app.py#L1014-L1173), [app.js](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/ui/app.js#L941-L975)):**
+   - Executes Tier 1 (Meta Cloud `muse-spark` / `sam-3.1`), Tier 2 (Apple Silicon M1 Max `mlx-vlm` 4-bit), and Tier 3 (`Deterministic SAM 3.1 Geometry`) back-to-back on the corridor's real `256×256` NOAA GeoTIFF crop, returning `latency_ms`, `tier_status`, `damage_severity`, `min_clear_width_m`, and `memory_cleared: true`, rendered in a compact 3-column comparison table via `[ Compare Cloud vs. Edge MLX Tiers ]`.
+3. **Visual Highlight of Unlocked Civilian Structures on Map ([app.py](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/src/app.py#L369-L413), [app.js](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/ui/app.js#L321-L343)):**
+   - Annotates building footprints with `nearest_node` and highlights unlocked high-severity structures in bright emerald/cyan on the Leaflet map with a prominent impact callout banner (`+N High-Severity Structures Unlocked | Clearance ROI: X.XX structures/m²`) when any Choke-Point ROI item is inspected or cleared.
+4. **Guided 1-Click Demo Scenario Bar ([index.html](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/ui/index.html#L93-L106), [app.js](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/ui/app.js#L977-L1036)):**
+   - Added 3 one-click preset buttons (`[Scenario 1: Differential Vehicle Routing]`, `[Scenario 2: SAM 3.1 5m Caliper & ROI Rescue]`, and `[Scenario 3: Air-Gap Blackout & 3-Tier Benchmark]`) for seamless hackathon demo recording.
+5. **Verification ([test_app.py](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/tests/test_app.py#L368-L419)):**
+   - **41/41 pytest tests passing** across the entire suite (`33.63s`) with 100% zero-CDN static asset verification.
+
+

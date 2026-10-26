@@ -20,6 +20,7 @@
     lastRoiRecommendations: [],
     activeEdgeId: null,
     inspectorViewMode: "crop", // "crop" | "schematic"
+    highlightedUnlockedNodes: [],
     lastCaliperGeojson: null,
     boundsWgs84: [-85.4251, 29.9249, -85.3999, 29.9501],
     selectedSegment: null,
@@ -56,6 +57,11 @@
     const map = L.map("map", {
       center: [centerLat, centerLon],
       zoom: 15,
+      minZoom: 14,
+      maxZoom: 19,
+      zoomSnap: 0.25,
+      zoomDelta: 0.5,
+      maxBoundsViscosity: 1.0,
       zoomControl: true,
       attributionControl: false,
     });
@@ -81,6 +87,28 @@
       setPickMode(null);
       refreshRoute();
     });
+
+    window.addEventListener("resize", function () {
+      if (!state.map) return;
+      state.map.invalidateSize();
+      applyAoiViewportBounds(false);
+    });
+  }
+
+  function applyAoiViewportBounds(snapToFit) {
+    if (!state.map || !state.boundsWgs84) return;
+    const [minLon, minLat, maxLon, maxLat] = state.boundsWgs84;
+    const aoiBounds = L.latLngBounds([
+      [minLat, minLon],
+      [maxLat, maxLon],
+    ]);
+    const computedFitZoom = state.map.getBoundsZoom(aoiBounds, false, [24, 24]);
+    const minFitZoom = Math.max(14, computedFitZoom);
+    state.map.setMinZoom(minFitZoom);
+    state.map.setMaxBounds(aoiBounds.pad(0.15));
+    if (snapToFit || state.map.getZoom() < minFitZoom) {
+      state.map.fitBounds(aoiBounds, { padding: [24, 24] });
+    }
   }
 
   function setPickMode(mode) {
@@ -160,6 +188,7 @@
       interactive: false,
     }).addTo(state.map);
 
+    applyAoiViewportBounds(false);
     renderBuildingsLayer();
     renderRoadsLayer();
   }
@@ -178,9 +207,21 @@
       no_damage: "#22c55e",
     };
 
+    const unlockedSet = new Set((state.highlightedUnlockedNodes || []).map(String));
+
     L.geoJSON(state.buildingsGeojson, {
       style: function (feature) {
-        const sev = (feature.properties && feature.properties.damage_severity) || "no_damage";
+        const p = feature.properties || {};
+        const sev = p.damage_severity || "no_damage";
+        const isUnlocked = unlockedSet.has(String(p.nearest_node || ""));
+        if (isUnlocked && p.is_high_severity) {
+          return {
+            color: "#06b6d4",
+            fillColor: "#10b981",
+            weight: 2.5,
+            fillOpacity: 0.85,
+          };
+        }
         return {
           color: sevColors[sev] || "#64748b",
           fillColor: sevColors[sev] || "#64748b",
@@ -190,10 +231,12 @@
       },
       onEachFeature: function (feature, layer) {
         const p = feature.properties || {};
+        const isUnlocked = unlockedSet.has(String(p.nearest_node || ""));
         layer.bindPopup(
           `<strong>Building ${p.building_id || ""}</strong><br/>` +
           `Damage Severity: <code>${p.damage_severity}</code><br/>` +
-          `High Severity Target: <strong>${p.is_high_severity ? "YES" : "NO"}</strong>`
+          `High Severity Target: <strong>${p.is_high_severity ? "YES" : "NO"}</strong>` +
+          (isUnlocked ? `<br/><strong style="color:#10b981;">UNLOCKED BY CHOKE-POINT CLEARANCE</strong>` : "")
         );
       },
     }).addTo(state.buildingsLayer);
@@ -253,6 +296,68 @@
     }
   }
 
+  function updateCaliperThresholdGauge(minClearWidthM, hasWater) {
+    const w = hasWater ? 0.0 : Math.max(0.0, Number(minClearWidthM || 0));
+    const maxScaleM = 6.0;
+    const pct = Math.min(100, Math.max(0, (w / maxScaleM) * 100));
+
+    const labelEl = document.getElementById("gauge-measured-span-label");
+    if (labelEl) {
+      labelEl.textContent = hasWater
+        ? `Measured: 0.00m (WATER=INF)`
+        : `Measured: ${w.toFixed(2)}m`;
+    }
+
+    const fillEl = document.getElementById("caliper-gauge-fill");
+    if (fillEl) {
+      fillEl.style.width = `${pct.toFixed(1)}%`;
+      fillEl.classList.remove("gauge-warning", "gauge-danger");
+      if (hasWater || w < 1.2) {
+        fillEl.classList.add("gauge-danger");
+      } else if (w < 3.5) {
+        fillEl.classList.add("gauge-warning");
+      }
+    }
+
+    const checks = [
+      { id: "gauge-badge-atv", label: "ATV (\u22651.2m)", pass: !hasWater && w >= 1.2 },
+      { id: "gauge-badge-ambulance", label: "Ambulance (\u22652.2m)", pass: !hasWater && w >= 2.2 },
+      { id: "gauge-badge-fire_engine", label: "Fire Engine (\u22653.5m)", pass: !hasWater && w >= 3.5 },
+    ];
+    checks.forEach(function (item) {
+      const el = document.getElementById(item.id);
+      if (!el) return;
+      el.textContent = `${item.label}: ${item.pass ? "PASS" : "BLOCKED"}`;
+      el.classList.toggle("pass", item.pass);
+      el.classList.toggle("blocked", !item.pass);
+    });
+  }
+
+  function updateUnlockedStructuresHighlight(edgeId) {
+    const rec = (state.lastRoiRecommendations || []).find(function (r) {
+      const rId = r.edge_id || `${r.edge_u}-${r.edge_v}-${r.edge_key}`;
+      return String(rId) === String(edgeId);
+    });
+    const bannerEl = document.getElementById("unlocked-impact-banner");
+    const textEl = document.getElementById("unlocked-impact-text");
+
+    if (rec && rec.high_severity_structures_unlocked > 0) {
+      state.highlightedUnlockedNodes = rec.unlocked_node_ids || [rec.edge_u, rec.edge_v];
+      if (bannerEl && textEl) {
+        textEl.textContent =
+          `+${rec.high_severity_structures_unlocked} High-Severity Structures Unlocked | ` +
+          `Clearance ROI: ${Number(rec.clearance_roi).toFixed(2)} structures/m² (${rec.road_name})`;
+        bannerEl.classList.remove("hidden");
+      }
+    } else {
+      state.highlightedUnlockedNodes = [];
+      if (bannerEl) {
+        bannerEl.classList.add("hidden");
+      }
+    }
+    renderBuildingsLayer();
+  }
+
   /**
    * Fetch 5m orthogonal caliper rays & SAM 3.1 masks for `edgeId`, render on map,
    * load `/api/choke-point/{edgeId}/crop.png` or `/recon-schematic.png`, and run live 3-tier VLM assessment.
@@ -266,6 +371,7 @@
       card.classList.toggle("selected-corridor", card.getAttribute("data-edge-id") === state.activeEdgeId);
     });
 
+    updateUnlockedStructuresHighlight(state.activeEdgeId);
     updateInspectorImage();
 
     // Fetch caliper GeoJSON and VLM assessment concurrently
@@ -277,6 +383,10 @@
     if (caliperRes.ok) {
       const caliperGeojson = await caliperRes.json();
       state.lastCaliperGeojson = caliperGeojson;
+      const cProps = caliperGeojson.properties || {};
+      if (cProps.min_clear_width_m !== undefined) {
+        updateCaliperThresholdGauge(cProps.min_clear_width_m, Boolean(cProps.has_water_obstruction));
+      }
       renderCaliperLayer(caliperGeojson, Boolean(zoomToCorridor));
     }
     await refreshMetaModelsTelemetry();
@@ -578,6 +688,12 @@
   }
 
   async function toggleSimulateClearance(u, v, key) {
+    const clickedEdgeId = `${u}-${v}-${Number(key || 0)}`;
+    const priorRec = (state.lastRoiRecommendations || []).find(function (r) {
+      const rId = r.edge_id || `${r.edge_u}-${r.edge_v}-${r.edge_key}`;
+      return String(rId) === clickedEdgeId;
+    });
+
     const res = await fetch("/api/simulate-clear", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -596,7 +712,19 @@
     renderRoadsLayer();
     renderRoiQueue(state.lastRoiRecommendations);
     await refreshRoute();
-    if (state.activeEdgeId) {
+
+    if (priorRec && priorRec.high_severity_structures_unlocked > 0) {
+      state.highlightedUnlockedNodes = priorRec.unlocked_node_ids || [u, v];
+      const bannerEl = document.getElementById("unlocked-impact-banner");
+      const textEl = document.getElementById("unlocked-impact-text");
+      if (bannerEl && textEl) {
+        textEl.textContent =
+          `+${priorRec.high_severity_structures_unlocked} High-Severity Structures Unlocked | ` +
+          `Clearance ROI: ${Number(priorRec.clearance_roi).toFixed(2)} structures/m² (${priorRec.road_name})`;
+        bannerEl.classList.remove("hidden");
+      }
+      renderBuildingsLayer();
+    } else if (state.activeEdgeId) {
       await inspectCorridorByEdgeId(state.activeEdgeId, false);
     }
   }
@@ -856,6 +984,104 @@
     await refreshMetaModelsTelemetry();
   }
 
+  async function runBenchmarkTiers(edgeId) {
+    const targetEdge = String(edgeId || state.activeEdgeId || "0");
+    const boxEl = document.getElementById("benchmark-tiers-box");
+    if (!boxEl) return;
+    boxEl.classList.remove("hidden");
+    boxEl.innerHTML = "Running Side-by-Side 3-Tier Failover Benchmark...";
+
+    const res = await fetch("/api/benchmark-tiers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        edge_id: targetEdge,
+        force_offline: Boolean(state.forceOffline),
+      }),
+    });
+    const data = await res.json();
+    const colsHtml = (data.tiers || [])
+      .map(function (t) {
+        return `
+          <div class="benchmark-col">
+            <div class="benchmark-col-title">${t.tier_label}</div>
+            <div>Status: <code>${t.tier_status}</code></div>
+            <div>Latency: <strong>${t.latency_ms} ms</strong></div>
+            <div>Severity: <code>${t.damage_severity}</code></div>
+            <div>Span: <strong>${t.min_clear_width_m}m</strong></div>
+            <div>MemClear: <code>${t.memory_cleared}</code></div>
+          </div>
+        `;
+      })
+      .join("");
+
+    boxEl.innerHTML = `
+      <div class="benchmark-grid">${colsHtml}</div>
+    `;
+    await refreshMetaModelsTelemetry();
+  }
+
+  async function runDemoScenario(scenarioNum) {
+    document.querySelectorAll(".demo-scenario-btn").forEach(function (btn) {
+      btn.classList.toggle("active", btn.getAttribute("data-scenario") === String(scenarioNum));
+    });
+
+    if (String(scenarioNum) === "1") {
+      // Scenario 1: Differential Vehicle Routing (Pinched corridor passable for ATV/Ambulance, blocked for Fire Engine)
+      state.vehicleClass = "fire_engine";
+      document.querySelectorAll(".vehicle-btn").forEach(function (b) {
+        b.classList.toggle("active", b.getAttribute("data-vehicle") === "fire_engine");
+      });
+      renderRoadsLayer();
+      await Promise.all([refreshRoute(), refreshClearanceRoi()]);
+      if (state.lastRoiRecommendations.length > 0) {
+        const rec = state.lastRoiRecommendations[0];
+        const edgeId = rec.edge_id || `${rec.edge_u}-${rec.edge_v}-${rec.edge_key}`;
+        await inspectCorridorByEdgeId(edgeId, true);
+      }
+    } else if (String(scenarioNum) === "2") {
+      // Scenario 2: SAM 3.1 5m Caliper & ROI Rescue
+      state.showCaliperRays = true;
+      const rayToggle = document.getElementById("toggle-caliper-rays");
+      if (rayToggle) rayToggle.checked = true;
+      state.inspectorViewMode = "schematic";
+      const btnCrop = document.getElementById("btn-view-crop");
+      const btnSchematic = document.getElementById("btn-view-schematic");
+      if (btnCrop && btnSchematic) {
+        btnSchematic.classList.add("active");
+        btnCrop.classList.remove("active");
+      }
+      if (state.lastRoiRecommendations.length > 0) {
+        const rec = state.lastRoiRecommendations[0];
+        const edgeId = rec.edge_id || `${rec.edge_u}-${rec.edge_v}-${rec.edge_key}`;
+        await inspectCorridorByEdgeId(edgeId, true);
+      }
+    } else if (String(scenarioNum) === "3") {
+      // Scenario 3: Air-Gap Blackout & 3-Tier Benchmark
+      state.forceOffline = true;
+      const blackoutToggle = document.getElementById("toggle-comms-blackout");
+      if (blackoutToggle) {
+        blackoutToggle.checked = true;
+        const labelParent = blackoutToggle.closest(".blackout-switch");
+        if (labelParent) labelParent.classList.add("active-blackout");
+      }
+      const dot = document.getElementById("network-status-dot");
+      const netText = document.getElementById("network-status-text");
+      if (dot) {
+        dot.classList.remove("online");
+        dot.classList.add("offline");
+      }
+      if (netText) {
+        netText.textContent = "COMMS BLACKOUT (EDGE ONLY)";
+      }
+      const targetEdge = state.activeEdgeId || "0";
+      await Promise.all([
+        runVlmAssessmentForEdge(targetEdge),
+        runBenchmarkTiers(targetEdge),
+      ]);
+    }
+  }
+
   function switchTab(tabId) {
     document.querySelectorAll(".panel-tab").forEach(function (btn) {
       btn.classList.toggle("active", btn.getAttribute("data-tab") === tabId);
@@ -945,6 +1171,13 @@
       resetSimulatedClearances();
     });
 
+    const btnFitAoi = document.getElementById("btn-fit-aoi");
+    if (btnFitAoi) {
+      btnFitAoi.addEventListener("click", function () {
+        applyAoiViewportBounds(true);
+      });
+    }
+
     document.getElementById("btn-run-assess").addEventListener("click", function () {
       const targetEdge = state.activeEdgeId || "0";
       runVlmAssessmentForEdge(targetEdge);
@@ -981,6 +1214,19 @@
         runVoiceDispatch();
       });
     }
+
+    const btnBenchmark = document.getElementById("btn-benchmark-tiers");
+    if (btnBenchmark) {
+      btnBenchmark.addEventListener("click", function () {
+        runBenchmarkTiers(state.activeEdgeId || "0");
+      });
+    }
+
+    document.querySelectorAll(".demo-scenario-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        runDemoScenario(btn.getAttribute("data-scenario"));
+      });
+    });
   }
 
   document.addEventListener("DOMContentLoaded", async function () {

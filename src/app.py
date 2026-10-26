@@ -138,6 +138,13 @@ class VoiceDispatchRequest(BaseModel):
     auto_apply_clearance: bool = False
 
 
+class BenchmarkTiersRequest(BaseModel):
+    """Request payload for `POST /api/benchmark-tiers`."""
+
+    edge_id: str | int = "0"
+    force_offline: bool = False
+
+
 class FirstLightState:
     """In-memory state manager holding the annotated road graph, masks, layers, and failover router."""
 
@@ -360,6 +367,8 @@ class FirstLightState:
         self.active_graph = self.base_graph.copy()
 
     def get_buildings_geojson(self) -> dict[str, Any]:
+        self.ensure_loaded()
+        assert self.base_graph is not None
         if self.buildings_features is None:
             features: list[dict[str, Any]] = []
             if BUILDINGS_GEOJSON_PATH.exists():
@@ -380,6 +389,10 @@ class FirstLightState:
                     geom = row.geometry
                     if geom is None or geom.is_empty:
                         continue
+                    centroid = geom.centroid
+                    nearest_n = find_nearest_node(
+                        self.base_graph, float(centroid.x), float(centroid.y)
+                    )
                     sev = severities[int(idx) % len(severities)]
                     features.append(
                         {
@@ -390,6 +403,7 @@ class FirstLightState:
                                 "building_type": str(row.get("building") or "yes"),
                                 "damage_severity": sev,
                                 "is_high_severity": sev in ("major_damage", "destroyed"),
+                                "nearest_node": str(nearest_n),
                             },
                         }
                     )
@@ -995,6 +1009,169 @@ async def post_assess(req: AssessRequest) -> dict[str, Any]:
     payload["memory_cleared"] = True
     payload["unified_memory_stats"] = mem_stats
     return payload
+
+
+@app.post("/api/benchmark-tiers")
+async def post_benchmark_tiers(req: BenchmarkTiersRequest) -> dict[str, Any]:
+    """
+    Execute Tier 1 (Meta Cloud `muse-spark` / `sam-3.1`), Tier 2 (Apple Silicon M1 Max
+    `mlx-vlm` 4-bit), and Tier 3 (`Deterministic SAM 3.1 Geometry`) back-to-back on the
+    selected corridor's real 256x256 NOAA GeoTIFF crop, returning a structured side-by-side
+    benchmark comparison with live latency and unified memory telemetry.
+    """
+    import time
+
+    state.ensure_loaded()
+    u, v, k, edata = state.resolve_edge_by_id(req.edge_id)
+    resolved_edge_id = f"{u}-{v}-{k}"
+    lon, lat = state.get_edge_midpoint_lonlat(u, v, edata)
+    crop_bytes = extract_corridor_aerial_crop_png(
+        RASTER_TIF_PATH, lon=lon, lat=lat, size_px=256
+    )
+
+    raw_name = edata.get("name")
+    if isinstance(raw_name, list):
+        road_name = ", ".join(str(x) for x in raw_name if x)
+    elif raw_name is not None and not (
+        isinstance(raw_name, float) and math.isnan(raw_name)
+    ):
+        road_name = str(raw_name)
+    else:
+        road_name = f"Segment {u}-{v}"
+
+    min_clear_w = round(float(edata.get("min_clear_width_m", 8.0)), 2)
+    debris_sqm = round(float(edata.get("debris_area_sqm", 0.0)), 2)
+    water_ratio = float(edata.get("water_overlap_ratio", 0.0))
+    length_m = float(edata.get("length_m", 50.0))
+    nominal_w = float(edata.get("nominal_width_m", 8.0))
+    water_area = float(edata.get("water_area_m2", water_ratio * length_m * nominal_w))
+    gsd_val = round(float(edata.get("gsd_m_per_px", 0.2804)), 4)
+
+    telemetry = GeometricTelemetry(
+        target_id=resolved_edge_id,
+        road_name=road_name,
+        min_clear_width_m=min_clear_w,
+        debris_area_m2=debris_sqm,
+        water_area_m2=water_area,
+        has_water_obstruction=bool(
+            edata.get("has_water_obstruction", False) or water_ratio > 0.0
+        ),
+        building_debris_overlap_ratio=(
+            0.38 if debris_sqm >= 18.0 else (0.14 if debris_sqm > 0 else 0.0)
+        ),
+        building_water_overlap_ratio=water_ratio,
+        gsd_m_per_px=gsd_val,
+    )
+
+    prev_mode = state.router.mode
+    try:
+        # 1. Tier 3: Deterministic SAM 3.1 Geometry Raycast
+        state.router.mode = FailoverMode.FORCE_DETERMINISTIC
+        t3_res = await state.router.assess_damage_async(
+            telemetry, image_source=crop_bytes, force_offline=True
+        )
+
+        # 2. Tier 2: Apple Silicon M1 Max MLX 4-bit Edge VLM
+        state.router.mode = FailoverMode.FORCE_MLX
+        t2_res = await state.router.assess_damage_async(
+            telemetry, image_source=crop_bytes, force_offline=True
+        )
+
+        # 3. Tier 1: Meta Cloud API (muse-spark / sam-3.1) with 2.5s timeout
+        t0_cloud = time.perf_counter()
+        if req.force_offline:
+            t1_latency_ms = round((time.perf_counter() - t0_cloud) * 1000.0, 3)
+            t1_status = "blackout_bypassed"
+            t1_b_sev = t2_res.building_damage_severity
+            t1_r_sev = t2_res.road_damage_severity
+        elif not state.router.api_key:
+            t1_latency_ms = round((time.perf_counter() - t0_cloud) * 1000.0, 3)
+            t1_status = "failover_no_api_key"
+            t1_b_sev = t2_res.building_damage_severity
+            t1_r_sev = t2_res.road_damage_severity
+        else:
+            state.router.mode = FailoverMode.AUTO
+            t1_try = await state.router.assess_damage_async(
+                telemetry, image_source=crop_bytes, force_offline=False
+            )
+            t1_latency_ms = round(float(t1_try.latency_ms), 3)
+            t1_status = (
+                "online_active"
+                if t1_try.tier_used == ConnectivityTier.TIER_1_CLOUD
+                else "timeout_failover_to_edge"
+            )
+            t1_b_sev = t1_try.building_damage_severity
+            t1_r_sev = t1_try.road_damage_severity
+    finally:
+        state.router.mode = prev_mode
+
+    mem_stats = release_unified_memory()
+    state.meta_suite.record_model_invocation(
+        "open-weight-mlx-4bit", t2_res.latency_ms, ConnectivityTier.TIER_2_MLX.value
+    )
+    state.meta_suite.record_model_invocation(
+        "sam-3.1", t3_res.latency_ms, "local_mps_fp16"
+    )
+
+    tiers_list = [
+        {
+            "tier_id": ConnectivityTier.TIER_1_CLOUD.value,
+            "tier_label": "Tier 1: Meta Cloud API",
+            "model_id": "muse-spark + sam-3.1",
+            "tier_status": t1_status,
+            "latency_ms": t1_latency_ms,
+            "damage_severity": t1_r_sev,
+            "building_damage_severity": t1_b_sev,
+            "road_damage_severity": t1_r_sev,
+            "min_clear_width_m": min_clear_w,
+            "memory_cleared": True,
+        },
+        {
+            "tier_id": ConnectivityTier.TIER_2_MLX.value,
+            "tier_label": "Tier 2: Apple Silicon MLX 4-bit",
+            "model_id": "Llama-3.2-11B-4bit (mlx-vlm)",
+            "tier_status": (
+                "edge_mlx_active"
+                if t2_res.tier_used == ConnectivityTier.TIER_2_MLX
+                else "edge_fallback_active"
+            ),
+            "latency_ms": round(float(t2_res.latency_ms), 3),
+            "damage_severity": t2_res.road_damage_severity,
+            "building_damage_severity": t2_res.building_damage_severity,
+            "road_damage_severity": t2_res.road_damage_severity,
+            "min_clear_width_m": min_clear_w,
+            "memory_cleared": True,
+        },
+        {
+            "tier_id": ConnectivityTier.TIER_3_DETERMINISTIC.value,
+            "tier_label": "Tier 3: Deterministic SAM 3.1",
+            "model_id": "sam-3.1-orthogonal-caliper",
+            "tier_status": "deterministic_ready",
+            "latency_ms": round(float(t3_res.latency_ms), 3),
+            "damage_severity": t3_res.road_damage_severity,
+            "building_damage_severity": t3_res.building_damage_severity,
+            "road_damage_severity": t3_res.road_damage_severity,
+            "min_clear_width_m": min_clear_w,
+            "memory_cleared": True,
+        },
+    ]
+
+    return {
+        "edge_id": resolved_edge_id,
+        "road_name": road_name,
+        "force_offline": req.force_offline,
+        "min_clear_width_m": min_clear_w,
+        "debris_area_sqm": debris_sqm,
+        "gsd_m_per_px": gsd_val,
+        "passability": t2_res.passability,
+        "damage_severity": t2_res.road_damage_severity,
+        "tier_status": tiers_list[1]["tier_status"],
+        "latency_ms": tiers_list[1]["latency_ms"],
+        "memory_cleared": True,
+        "unified_memory_stats": mem_stats,
+        "tiers": tiers_list,
+        "comparison": {item["tier_id"]: item for item in tiers_list},
+    }
 
 
 @app.post("/api/route")

@@ -849,6 +849,246 @@ html, body {
   display: none;
 }
 
+/* Guided 1-Click Live Demo Scenario Bar */
+.demo-scenarios-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 14px;
+  background: rgba(15, 23, 42, 0.96);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.demo-bar-label {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: var(--accent-amber);
+}
+
+.demo-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.demo-scenario-btn {
+  background: rgba(30, 41, 59, 0.95);
+  color: #e2e8f0;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+}
+
+.demo-scenario-btn:hover,
+.demo-scenario-btn.active {
+  background: rgba(245, 158, 11, 0.22);
+  color: #fde68a;
+  border-color: var(--accent-amber);
+}
+
+/* Unlocked Civilian Structures Legend Swatch & Map Impact Callout Banner */
+.swatch-unlocked {
+  background: #06b6d4;
+  box-shadow: 0 0 6px #10b981;
+}
+
+.unlocked-impact-banner {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 950;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: rgba(6, 78, 59, 0.94);
+  border: 2px solid #10b981;
+  border-radius: 999px;
+  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.35);
+  color: #ecfdf5;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.unlocked-impact-banner.hidden {
+  display: none;
+}
+
+/* Cross-Section Caliper Threshold Gauge */
+.caliper-gauge-card {
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.gauge-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+}
+
+.gauge-span-value {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-blue);
+}
+
+.gauge-track-wrapper {
+  position: relative;
+  padding-top: 2px;
+  padding-bottom: 14px;
+}
+
+.gauge-track {
+  position: relative;
+  height: 12px;
+  background: #1e293b;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  overflow: visible;
+}
+
+.gauge-fill {
+  height: 100%;
+  border-radius: 5px;
+  background: linear-gradient(90deg, #10b981 0%, #38bdf8 100%);
+  transition: width 0.25s ease, background 0.25s ease;
+}
+
+.gauge-fill.gauge-warning {
+  background: linear-gradient(90deg, #f59e0b 0%, #eab308 100%);
+}
+
+.gauge-fill.gauge-danger {
+  background: linear-gradient(90deg, #ef4444 0%, #f97316 100%);
+}
+
+.gauge-marker {
+  position: absolute;
+  top: -3px;
+  bottom: -14px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+}
+
+.gauge-marker .marker-line {
+  width: 2px;
+  height: 18px;
+  background: #f8fafc;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.9);
+}
+
+.gauge-marker .marker-tag {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  color: #cbd5e1;
+  white-space: nowrap;
+  margin-top: 1px;
+}
+
+.gauge-badges-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.gauge-v-badge {
+  flex: 1;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 3px 5px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.gauge-v-badge.pass {
+  background: rgba(16, 185, 129, 0.18);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.6);
+}
+
+.gauge-v-badge.blocked {
+  background: rgba(239, 68, 68, 0.18);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.6);
+}
+
+/* Side-by-Side 3-Tier Failover Benchmark Card */
+.benchmark-dock-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.btn-benchmark-tiers {
+  width: 100%;
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border-color: #10b981;
+  font-weight: 700;
+  padding: 5px 10px;
+  text-align: center;
+}
+
+.benchmark-tiers-box {
+  background: rgba(11, 17, 32, 0.96);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 7px 8px;
+  font-size: 10px;
+}
+
+.benchmark-tiers-box.hidden {
+  display: none;
+}
+
+.benchmark-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.benchmark-col {
+  background: rgba(30, 41, 59, 0.75);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 5px;
+  padding: 5px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-mono);
+}
+
+.benchmark-col-title {
+  font-weight: 800;
+  color: var(--accent-blue);
+  font-size: 9.5px;
+}
+
 /* Responsive Touch Layout for Mobile Field Phones */
 @media (max-width: 960px) {
   .workspace {

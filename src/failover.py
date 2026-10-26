@@ -539,10 +539,17 @@ class VLMFailoverRouter:
                 else:
                     pil_img = Image.new("RGB", (64, 64), color=(128, 128, 128))
 
-                arr_np = np.asarray(pil_img, dtype=np.float16) / 255.0
-                vision_tensor = mx.array(arr_np, dtype=mx.float16)
-                mean_luma = float(mx.mean(vision_tensor).item())
-                contrast_std = float(mx.std(vision_tensor).item())
+                arr_f32 = np.asarray(pil_img, dtype=np.float32)
+                arr_fp16 = (arr_f32 / 255.0).astype(np.float16)
+                vision_tensor = mx.array(arr_fp16, dtype=mx.float16)
+                # Compute luma/std in float32 to prevent 256x256x3 accumulator overflow (>65,504) in fp16
+                vision_f32 = mx.astype(vision_tensor, mx.float32) * 255.0
+                mean_luma = float(mx.mean(vision_f32).item())
+                contrast_std = float(mx.std(vision_f32).item())
+                if not np.isfinite(mean_luma):
+                    mean_luma = float(np.mean(arr_f32))
+                if not np.isfinite(contrast_std):
+                    contrast_std = float(np.std(arr_f32))
 
                 det_b, det_r, _ = evaluate_deterministic_tier3(telemetry)
                 raw_output = json.dumps(
@@ -552,7 +559,7 @@ class VLMFailoverRouter:
                         "visual_cue_summary": (
                             f"Apple Silicon MLX ({model_type} {quant_bits}-bit fp16) analyzed "
                             f"{pil_img.size[0]}x{pil_img.size[1]} NOAA aerial patch "
-                            f"(luma={mean_luma:.2f}, texture_std={contrast_std:.2f}): "
+                            f"(luma={mean_luma:.1f}, texture_std={contrast_std:.1f}): "
                             f"{telemetry.debris_area_m2:.2f} m² debris leaving "
                             f"{telemetry.min_clear_width_m:.2f}m clear span."
                         ),

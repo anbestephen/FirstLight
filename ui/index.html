@@ -90,6 +90,22 @@
     </div>
   </section>
 
+  <!-- Guided 1-Click Live Demo Scenario Bar -->
+  <section class="demo-scenarios-bar" id="demo-scenarios-bar" aria-label="Live Demo Scenarios">
+    <span class="demo-bar-label">LIVE DEMO SCENARIOS:</span>
+    <div class="demo-btn-group">
+      <button type="button" class="action-btn demo-scenario-btn" id="btn-scenario-1" data-scenario="1">
+        Scenario 1: Differential Vehicle Routing
+      </button>
+      <button type="button" class="action-btn demo-scenario-btn" id="btn-scenario-2" data-scenario="2">
+        Scenario 2: SAM 3.1 5m Caliper &amp; ROI Rescue
+      </button>
+      <button type="button" class="action-btn demo-scenario-btn" id="btn-scenario-3" data-scenario="3">
+        Scenario 3: Air-Gap Blackout &amp; 3-Tier Benchmark
+      </button>
+    </div>
+  </section>
+
   <!-- Main Responsive Workspace -->
   <main class="workspace">
     <!-- Map Viewport -->
@@ -103,6 +119,7 @@
           <span class="legend-item"><i class="swatch swatch-debris"></i>Restricted (1.2–3.5m)</span>
           <span class="legend-item"><i class="swatch swatch-pinch"></i>Pinch Point Ray</span>
           <span class="legend-item"><i class="swatch swatch-water"></i>Water (Weight=&infin;)</span>
+          <span class="legend-item"><i class="swatch swatch-unlocked"></i>Unlocked Structure</span>
           <span class="legend-item"><i class="swatch swatch-route"></i>Active Route</span>
         </div>
         <div class="map-actions">
@@ -127,7 +144,18 @@
           <button type="button" class="action-btn btn-reset" id="btn-reset-sim" title="Reset simulated debris clearances">
             Reset Sim (<span id="cleared-count">0</span>)
           </button>
+          <button type="button" class="action-btn" id="btn-fit-aoi" title="Snap map view to full Mexico Beach AOI corridor">
+            Fit AOI
+          </button>
         </div>
+      </div>
+
+      <!-- Prominent Unlocked Civilian Structures Impact Callout Banner -->
+      <div class="unlocked-impact-banner hidden" id="unlocked-impact-banner" role="status" aria-live="polite">
+        <span class="impact-icon">&#x1F3E0;</span>
+        <span class="impact-text" id="unlocked-impact-text">
+          +0 High-Severity Structures Unlocked | Clearance ROI: 0.00 structures/m&sup2;
+        </span>
       </div>
 
       <!-- Active Route Telemetry Banner -->
@@ -195,8 +223,48 @@
             </div>
           </div>
         </div>
+
+        <!-- Cross-Section Caliper Threshold Gauge -->
+        <div class="caliper-gauge-card" id="caliper-threshold-gauge">
+          <div class="gauge-header-row">
+            <span class="gauge-title">CROSS-SECTION CALIPER THRESHOLD GAUGE</span>
+            <span class="gauge-span-value" id="gauge-measured-span-label">Measured: -- m</span>
+          </div>
+          <div class="gauge-track-wrapper">
+            <div class="gauge-track">
+              <div class="gauge-fill" id="caliper-gauge-fill" style="width: 0%;"></div>
+              <!-- Explicit Vertical Threshold Markers (0m to 6.0m scale) -->
+              <div class="gauge-marker" style="left: 20%;" title="ATV / Foot Minimum Width: 1.2m">
+                <span class="marker-line"></span>
+                <span class="marker-tag">ATV 1.2m</span>
+              </div>
+              <div class="gauge-marker" style="left: 36.67%;" title="Ambulance Minimum Width: 2.2m">
+                <span class="marker-line"></span>
+                <span class="marker-tag">Amb 2.2m</span>
+              </div>
+              <div class="gauge-marker" style="left: 58.33%;" title="Fire Engine Minimum Width: 3.5m">
+                <span class="marker-line"></span>
+                <span class="marker-tag">Fire 3.5m</span>
+              </div>
+            </div>
+          </div>
+          <div class="gauge-badges-row" id="gauge-vehicle-badges">
+            <span class="gauge-v-badge pass" id="gauge-badge-atv">ATV (&ge;1.2m): PASS</span>
+            <span class="gauge-v-badge pass" id="gauge-badge-ambulance">Ambulance (&ge;2.2m): PASS</span>
+            <span class="gauge-v-badge blocked" id="gauge-badge-fire_engine">Fire Engine (&ge;3.5m): BLOCKED</span>
+          </div>
+        </div>
+
         <div class="inspector-rationale" id="inspector-rationale-text">
           Click any Choke-Point ROI card below or tap a road segment on the map to project 5.0m orthogonal SAM 3.1 caliper rays and run live VLM damage grading.
+        </div>
+
+        <!-- Side-by-Side 3-Tier Failover Benchmark Controls & Table -->
+        <div class="benchmark-dock-section">
+          <button type="button" class="action-btn btn-benchmark-tiers" id="btn-benchmark-tiers">
+            &#x2696; Compare Cloud vs. Edge MLX Tiers (3-Tier Benchmark)
+          </button>
+          <div class="benchmark-tiers-box hidden" id="benchmark-tiers-box"></div>
         </div>
       </div>
 

@@ -404,3 +404,24 @@ async def test_meta_model_suite_wonder_voice_and_image_failover() -> None:
     out_img = Image.open(io.BytesIO(schematic_bytes))
     assert out_img.size == (256, 256)
 
+    # 5. Verify fast_edge_inference on a 256x256 RGB image never overflows float16 to luma=inf / texture_std=inf
+    fast_router = VLMFailoverRouter(
+        local_mlx_model_path="models/Llama-3.2-11B-Vision-Instruct-4bit",
+        mode=FailoverMode.FORCE_MLX,
+        fast_edge_inference=True,
+    )
+    telemetry = GeometricTelemetry(
+        target_id="edge-256-test",
+        road_name="US Highway 98",
+        min_clear_width_m=2.65,
+        debris_area_m2=24.0,
+    )
+    edge_res = await fast_router.assess_damage_async(
+        telemetry, image_source=buf.getvalue(), force_offline=True
+    )
+    assert "luma=inf" not in edge_res.passability_rationale
+    assert "texture_std=inf" not in edge_res.passability_rationale
+    assert "luma=nan" not in edge_res.passability_rationale
+    assert "luma=" in edge_res.passability_rationale
+
+

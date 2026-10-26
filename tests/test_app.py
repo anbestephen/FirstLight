@@ -179,6 +179,10 @@ def test_assess_endpoint_with_force_offline_comms_blackout_switch() -> None:
     assert blackout_data["memory_cleared"] is True
     assert blackout_data["latency_ms"] >= 0.0
     assert "0.2804 m/px GSD" in blackout_data["passability_rationale"]
+    assert "luma=inf" not in blackout_data["passability_rationale"]
+    assert "texture_std=inf" not in blackout_data["passability_rationale"]
+    assert "luma=inf" not in online_data["passability_rationale"]
+    assert "texture_std=inf" not in online_data["passability_rationale"]
 
 
 def test_route_endpoint_across_all_vehicle_classes() -> None:
@@ -363,4 +367,60 @@ def test_milestone6_meta_models_briefing_voice_and_schematic_endpoints() -> None
         assert s_res.content[:8] == b"\x89PNG\r\n\x1a\n"
         img = Image.open(io.BytesIO(s_res.content))
         assert img.size == (256, 256)
+
+
+def test_milestone7_benchmark_tiers_and_visual_storytelling_ui() -> None:
+    """
+    Verify Milestone 7 `POST /api/benchmark-tiers` side-by-side 3-tier comparison,
+    building `nearest_node` mapping for unlocked civilian structure highlighting,
+    Cross-Section Caliper Threshold Gauge, and Guided 1-Click Demo Scenario buttons.
+    """
+    roi_res = client.get("/api/clearance-roi?vehicle_class=fire_engine")
+    assert roi_res.status_code == 200
+    top_rec = roi_res.json()["recommendations"][0]
+    edge_id = f"{top_rec['edge_u']}-{top_rec['edge_v']}-{top_rec['edge_key']}"
+
+    # 1. Test POST /api/benchmark-tiers in both normal and force_offline modes
+    for offline_flag in (False, True):
+        bench_res = client.post(
+            "/api/benchmark-tiers",
+            json={"edge_id": edge_id, "force_offline": offline_flag},
+        )
+        assert bench_res.status_code == 200
+        b_data = bench_res.json()
+        assert b_data["edge_id"] == edge_id
+        assert b_data["force_offline"] is offline_flag
+        assert b_data["memory_cleared"] is True
+        assert b_data["min_clear_width_m"] > 0
+        assert "latency_ms" in b_data
+        assert "tier_status" in b_data
+        assert "damage_severity" in b_data
+        assert len(b_data["tiers"]) == 3
+        for tier_entry in b_data["tiers"]:
+            assert "latency_ms" in tier_entry
+            assert "tier_status" in tier_entry
+            assert "damage_severity" in tier_entry
+            assert tier_entry["min_clear_width_m"] == b_data["min_clear_width_m"]
+            assert tier_entry["memory_cleared"] is True
+
+    # 2. Verify building footprints include nearest_node for unlocked structure map highlighting
+    layers_res = client.get("/api/layers")
+    assert layers_res.status_code == 200
+    bldg_features = layers_res.json()["buildings"]["features"]
+    assert len(bldg_features) > 0
+    assert "nearest_node" in bldg_features[0]["properties"]
+
+    # 3. Verify Milestone 7 UI controls exist in index.html
+    html = client.get("/").text
+    assert "caliper-threshold-gauge" in html
+    assert "gauge-badge-atv" in html
+    assert "gauge-badge-ambulance" in html
+    assert "gauge-badge-fire_engine" in html
+    assert "btn-benchmark-tiers" in html
+    assert "unlocked-impact-banner" in html
+    assert "btn-scenario-1" in html
+    assert "btn-scenario-2" in html
+    assert "btn-scenario-3" in html
+    assert "btn-fit-aoi" in html
+
 
