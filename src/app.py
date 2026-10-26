@@ -7,11 +7,13 @@ bound to `0.0.0.0:8000` over local Wi-Fi.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import io
 import math
 import os
 from pathlib import Path
-from typing import Any, Literal
+import threading
+from typing import Any, AsyncIterator, Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -172,19 +174,26 @@ class FirstLightState:
         self.sim_masks_utm: dict[str, Any] | None = None
         self.buildings_features: list[dict[str, Any]] | None = None
         self.raster_preview_png: bytes | None = None
-        self.router = VLMFailoverRouter(
-            local_mlx_model_path=MODELS_DIR / "Llama-3.2-11B-Vision-Instruct-4bit",
-            mode=FailoverMode.AUTO,
-        )
-        self.meta_suite = MetaModelSuite(
-            self.router,
-            sam_checkpoint_path=MODELS_DIR / "sam3.1" / "model.safetensors",
-        )
         self.dispatch = DispatchHub(
             uplink_probe=(
                 None if os.environ.get("FIRSTLIGHT_UPLINK_PROBE", "1") == "0" else probe_tcp_uplink
             )
         )
+        self.router = VLMFailoverRouter(
+            local_mlx_model_path=MODELS_DIR / "Llama-3.2-11B-Vision-Instruct-4bit",
+            mode=FailoverMode.AUTO,
+            keep_mlx_resident=os.environ.get("FIRSTLIGHT_KEEP_MLX_RESIDENT", "1") != "0",
+            uplink_online_hint=lambda: self.dispatch.uplink_online,
+        )
+        self.meta_suite = MetaModelSuite(
+            self.router,
+            sam_checkpoint_path=MODELS_DIR / "sam3.1" / "model.safetensors",
+        )
+        self.warmup_status: dict[str, Any] = {
+            "edge_model": "not_started",
+            "cloud_cache_prewarmed": 0,
+            "cloud_cache_target": 0,
+        }
 
     def default_route_endpoints(self) -> tuple[tuple[float, float], tuple[float, float]]:
         """Return the default `(origin, destination)` lon/lat pair: westernmost and easternmost nodes."""
@@ -569,6 +578,88 @@ class FirstLightState:
 
 state = FirstLightState()
 
+
+def _edge_telemetry_and_crop(edge_id: str | int) -> tuple[str, GeometricTelemetry, bytes]:
+    """Resolve `edge_id` and build its measured telemetry plus the 256x256 NOAA aerial crop."""
+    u, v, k, edata = state.resolve_edge_by_id(edge_id)
+    resolved_edge_id = f"{u}-{v}-{k}"
+    lon, lat = state.get_edge_midpoint_lonlat(u, v, edata)
+    crop_bytes = extract_corridor_aerial_crop_png(RASTER_TIF_PATH, lon=lon, lat=lat, size_px=256)
+
+    raw_name = edata.get("name")
+    if isinstance(raw_name, list):
+        road_name = ", ".join(str(x) for x in raw_name if x)
+    elif raw_name is not None and not (isinstance(raw_name, float) and math.isnan(raw_name)):
+        road_name = str(raw_name)
+    else:
+        road_name = f"Segment {u}-{v}"
+
+    debris_sqm = float(edata.get("debris_area_sqm", 0.0))
+    water_ratio = float(edata.get("water_overlap_ratio", 0.0))
+    length_m = float(edata.get("length_m", 50.0))
+    nominal_w = float(edata.get("nominal_width_m", 8.0))
+    water_area = float(edata.get("water_area_m2", water_ratio * length_m * nominal_w))
+
+    telemetry = GeometricTelemetry(
+        target_id=resolved_edge_id,
+        road_name=road_name,
+        min_clear_width_m=float(edata.get("min_clear_width_m", 8.0)),
+        debris_area_m2=debris_sqm,
+        water_area_m2=water_area,
+        has_water_obstruction=bool(edata.get("has_water_obstruction", False) or water_ratio > 0.0),
+        building_debris_overlap_ratio=0.38 if debris_sqm >= 18.0 else (0.14 if debris_sqm > 0 else 0.0),
+        building_water_overlap_ratio=water_ratio,
+        gsd_m_per_px=float(edata.get("gsd_m_per_px", 0.2804)),
+    )
+    return resolved_edge_id, telemetry, crop_bytes
+
+
+def _run_demo_warmup() -> None:
+    """
+    Background warm-up so the live demo never stalls: load the Tier 2 Llama weights into
+    unified memory once, then pre-run real Muse Spark grading on the top choke points so
+    their first on-stage click is served from the cloud response cache.
+    """
+    status = state.warmup_status
+    try:
+        state.ensure_loaded()
+        if state.router.mlx_runtime is not None:
+            status["edge_model"] = "loading"
+            state.router.warm_up_edge_model()
+            status["edge_model"] = "resident"
+        else:
+            status["edge_model"] = "per_request"
+    except Exception as exc:
+        status["edge_model"] = f"failed:{type(exc).__name__}"
+
+    try:
+        assert state.active_graph is not None
+        recs = rank_choke_point_clearance_roi(
+            state.active_graph,
+            vehicle_class="fire_engine",
+            buildings_source=(
+                BUILDINGS_GRADED_GEOJSON_PATH
+                if BUILDINGS_GRADED_GEOJSON_PATH.exists()
+                else BUILDINGS_GEOJSON_PATH
+            ),
+            max_recommendations=int(os.environ.get("FIRSTLIGHT_PREWARM_EDGES", "5")),
+        )
+        status["cloud_cache_target"] = len(recs)
+        for rec in recs:
+            _, telemetry, crop = _edge_telemetry_and_crop(f"{rec.edge_u}-{rec.edge_v}-{rec.edge_key}")
+            if state.router.prewarm_cloud_assessment(telemetry, image_source=crop):
+                status["cloud_cache_prewarmed"] += 1
+    except Exception as exc:
+        status["cloud_cache_error"] = type(exc).__name__
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    if os.environ.get("FIRSTLIGHT_WARMUP", "1") != "0":
+        threading.Thread(target=_run_demo_warmup, name="firstlight-warmup", daemon=True).start()
+    yield
+
+
 app = FastAPI(
     title="FirstLight Tactical Disaster Response API",
     description=(
@@ -576,6 +667,7 @@ app = FastAPI(
         "multi-class emergency routing, and Choke-Point Clearance ROI engine."
     ),
     version="0.2.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -857,7 +949,15 @@ def get_health() -> dict[str, Any]:
             "tier_1_timeout_s": state.router.cloud_timeout_s,
             "tier_2_mlx_ready": mlx_weights_ready,
             "tier_2_model": "Llama-3.2-11B-Vision-Instruct-4bit",
+            "tier_2_runtime": (
+                state.router.mlx_runtime.status()
+                if state.router.mlx_runtime is not None
+                else {"resident": False}
+            ),
             "tier_3_deterministic_ready": True,
+            "cloud_reasoning_effort": state.router.cloud_reasoning_effort,
+            "cloud_cache_entries": len(state.router._cloud_cache),
+            "warmup": dict(state.warmup_status),
         },
         "device_health": {
             "hardware_profile": "Apple Silicon M1 Max (64 GB Unified Memory)",
@@ -1171,42 +1271,7 @@ async def post_assess(req: AssessRequest) -> dict[str, Any]:
     resolved_edge_id: str | None = None
 
     if req.edge_id is not None:
-        u, v, k, edata = state.resolve_edge_by_id(req.edge_id)
-        resolved_edge_id = f"{u}-{v}-{k}"
-        lon, lat = state.get_edge_midpoint_lonlat(u, v, edata)
-        crop_bytes = extract_corridor_aerial_crop_png(
-            RASTER_TIF_PATH, lon=lon, lat=lat, size_px=256
-        )
-
-        raw_name = edata.get("name")
-        if isinstance(raw_name, list):
-            road_name = ", ".join(str(x) for x in raw_name if x)
-        elif raw_name is not None and not (
-            isinstance(raw_name, float) and math.isnan(raw_name)
-        ):
-            road_name = str(raw_name)
-        else:
-            road_name = f"Segment {u}-{v}"
-
-        debris_sqm = float(edata.get("debris_area_sqm", 0.0))
-        water_ratio = float(edata.get("water_overlap_ratio", 0.0))
-        length_m = float(edata.get("length_m", 50.0))
-        nominal_w = float(edata.get("nominal_width_m", 8.0))
-        water_area = float(edata.get("water_area_m2", water_ratio * length_m * nominal_w))
-
-        telemetry = GeometricTelemetry(
-            target_id=resolved_edge_id,
-            road_name=road_name,
-            min_clear_width_m=float(edata.get("min_clear_width_m", 8.0)),
-            debris_area_m2=debris_sqm,
-            water_area_m2=water_area,
-            has_water_obstruction=bool(
-                edata.get("has_water_obstruction", False) or water_ratio > 0.0
-            ),
-            building_debris_overlap_ratio=0.38 if debris_sqm >= 18.0 else (0.14 if debris_sqm > 0 else 0.0),
-            building_water_overlap_ratio=water_ratio,
-            gsd_m_per_px=float(edata.get("gsd_m_per_px", 0.2804)),
-        )
+        resolved_edge_id, telemetry, crop_bytes = _edge_telemetry_and_crop(req.edge_id)
     else:
         telemetry = GeometricTelemetry(
             target_id=req.target_id,
@@ -1510,6 +1575,16 @@ def get_clearance_roi(
         ],
         "recommendations": [rec.to_dict() for rec in recommendations],
     }
+
+
+@app.post("/api/edge-runtime/unload")
+def post_unload_edge_runtime() -> dict[str, Any]:
+    """Explicitly release the resident Tier 2 Llama weights from unified memory."""
+    if state.router.mlx_runtime is None:
+        return {"resident": False, "unloaded": False}
+    state.router.mlx_runtime.unload()
+    state.warmup_status["edge_model"] = "unloaded"
+    return {**state.router.mlx_runtime.status(), "unloaded": True}
 
 
 @app.post("/api/simulate-clear")

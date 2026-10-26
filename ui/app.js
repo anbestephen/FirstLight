@@ -827,6 +827,9 @@
     const modeSelect = document.getElementById("select-failover-mode");
     const boxEl = document.getElementById("assess-result-box");
     boxEl.innerHTML = "Running 3-Tier VLM Damage Grading &amp; Circuit Breaker...";
+    document.getElementById("inspector-latency-row").innerHTML = state.forceOffline
+      ? `<span class="analyzing">On-device Llama 3.2 Vision analyzing aerial crop…</span>`
+      : `<span class="analyzing">Muse Spark 1.3 analyzing aerial crop…</span>`;
 
     const payload = {
       edge_id: String(edgeId),
@@ -850,7 +853,9 @@
     document.getElementById("inspector-road-name").textContent = data.target_id || String(edgeId);
     document.getElementById("inspector-latency-row").innerHTML =
       `Latency: <strong>${data.latency_ms} ms</strong> &bull; ` +
-      `Memory Cleared: <strong>${data.memory_cleared}</strong>`;
+      (data.cloud_cache_hit
+        ? `<span class="cache-hit" title="Real Muse Spark response computed earlier for this exact crop and measurement">cached Muse Spark response</span>`
+        : `Memory Cleared: <strong>${data.memory_cleared}</strong>`);
     document.getElementById("inspector-severity-row").innerHTML =
       `Building: <code>${data.building_damage_severity}</code> &bull; ` +
       `Road: <code>${data.road_damage_severity}</code>`;

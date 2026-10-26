@@ -16,14 +16,17 @@ Key Invariants (AGENTS.md & mlx-failover skill):
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import dataclass
 from enum import Enum
 import gc
+import hashlib
 import io
 import json
 import os
 from pathlib import Path
+import threading
 import time
 from typing import Any, Callable, Literal
 
@@ -61,6 +64,11 @@ DEFAULT_CLOUD_MODEL = "muse-spark-1.3"
 DEFAULT_LOCAL_MLX_MODEL_PATH = "models/Llama-3.2-11B-Vision-Instruct-4bit"
 DEFAULT_CLOUD_TIMEOUT_S = 15.0
 DEFAULT_CLOUD_MAX_TOKENS = 2048
+# `muse-spark-1.3` accepts OpenAI-style `reasoning_effort`; "low" cuts interactive grading
+# latency roughly in half versus the default (measured 6.8s -> 3.7s on a text-only probe).
+DEFAULT_CLOUD_REASONING_EFFORT: str | None = os.environ.get(
+    "FIRSTLIGHT_SPARK_REASONING_EFFORT", "low"
+) or None
 
 
 def _format_cloud_exception(prefix: str, exc: Exception) -> str:
@@ -129,6 +137,7 @@ class DamageAssessmentResult(BaseModel):
     fallback_chain: list[str] = Field(default_factory=list)
     latency_ms: float
     memory_cleared: bool = False
+    cloud_cache_hit: bool = False
 
 
 def normalize_damage_severity(raw_value: Any, default: DamageSeverity = "minor_damage") -> DamageSeverity:
@@ -408,6 +417,71 @@ def parse_vlm_json_response(
     return b_sev, r_sev, cue
 
 
+class ResidentMLXRuntime:
+    """
+    Keeps the 4-bit Llama 3.2 Vision weights resident in unified memory between Tier 2
+    calls, so an uplink loss mid-demo costs one generation (seconds) instead of a 6 GB
+    reload per request. MLX is not thread-safe, so loads and generations are serialized.
+    `unload()` releases the weights explicitly when memory is needed elsewhere.
+    """
+
+    def __init__(
+        self,
+        model_path: str | Path,
+        *,
+        loader: Callable[[str], tuple[Any, Any, dict[str, Any]]] | None = None,
+    ) -> None:
+        self.model_path = Path(model_path)
+        self._loader = loader or self._default_loader
+        self.uses_default_loader = loader is None
+        self._lock = threading.Lock()
+        self._bundle: tuple[Any, Any, dict[str, Any]] | None = None
+        self.load_seconds: float | None = None
+        self.load_count = 0
+
+    @staticmethod
+    def _default_loader(path: str) -> tuple[Any, Any, dict[str, Any]]:
+        from mlx_vlm import load
+        from mlx_vlm.utils import load_config
+
+        from src.mlx_patches import apply_mllama_cross_attention_kv_memo
+
+        apply_mllama_cross_attention_kv_memo()
+        model, processor = load(path)
+        return model, processor, load_config(path)
+
+    @property
+    def is_loaded(self) -> bool:
+        return self._bundle is not None
+
+    def ensure_loaded(self) -> tuple[Any, Any, dict[str, Any]]:
+        with self._lock:
+            if self._bundle is None:
+                t0 = time.perf_counter()
+                self._bundle = self._loader(str(self.model_path))
+                self.load_seconds = round(time.perf_counter() - t0, 2)
+                self.load_count += 1
+            return self._bundle
+
+    def run(self, fn: Callable[[Any, Any, dict[str, Any]], str]) -> str:
+        """Run `fn(model, processor, config)` with the resident weights, loading them on first use."""
+        model, processor, config = self.ensure_loaded()
+        with self._lock:
+            return fn(model, processor, config)
+
+    def unload(self) -> None:
+        with self._lock:
+            self._bundle = None
+        release_unified_memory()
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "resident": self.is_loaded,
+            "load_seconds": self.load_seconds,
+            "load_count": self.load_count,
+        }
+
+
 class VLMFailoverRouter:
     """
     3-Tier Connectivity & VLM Failover Circuit Breaker:
@@ -426,6 +500,10 @@ class VLMFailoverRouter:
         local_mlx_model_path: str | Path = DEFAULT_LOCAL_MLX_MODEL_PATH,
         mode: FailoverMode = FailoverMode.AUTO,
         mlx_runner: Callable[[str, str | Path | Image.Image | None, Path], str] | None = None,
+        cloud_reasoning_effort: str | None = DEFAULT_CLOUD_REASONING_EFFORT,
+        keep_mlx_resident: bool = False,
+        mlx_runtime: ResidentMLXRuntime | None = None,
+        uplink_online_hint: Callable[[], bool | None] | None = None,
     ) -> None:
         if api_key is not None:
             self.api_key = api_key
@@ -446,8 +524,75 @@ class VLMFailoverRouter:
         self.local_mlx_model_path = Path(local_mlx_model_path)
         self.mode = mode
         self._custom_mlx_runner = mlx_runner
+        self.cloud_reasoning_effort = cloud_reasoning_effort
+        self.mlx_runtime: ResidentMLXRuntime | None = mlx_runtime or (
+            ResidentMLXRuntime(self.local_mlx_model_path) if keep_mlx_resident else None
+        )
+        # Returns False when the internet uplink is known to be down, so Tier 1 is skipped
+        # immediately instead of waiting out the full cloud timeout during a real outage.
+        self.uplink_online_hint = uplink_online_hint
+        # Real Tier 1 responses keyed by (model, effort, prompt, image) so repeat views of the
+        # same corridor return instantly; hits are reported as `cloud_cache_hit=True`.
+        self._cloud_cache: dict[str, tuple[DamageSeverity, DamageSeverity, str]] = {}
         self.last_tier_used: ConnectivityTier = ConnectivityTier.TIER_3_DETERMINISTIC
         self.last_fallback_chain: list[str] = []
+
+    def _cloud_cache_key(
+        self,
+        telemetry: GeometricTelemetry,
+        image_source: str | Path | Image.Image | np.ndarray | bytes | None,
+    ) -> str:
+        digest = hashlib.sha256()
+        for part in (
+            self.cloud_model,
+            str(self.cloud_reasoning_effort),
+            self._build_vlm_prompt(telemetry),
+            _encode_image_to_base64(image_source) or "",
+        ):
+            digest.update(part.encode("utf-8"))
+            digest.update(b"\x00")
+        return digest.hexdigest()
+
+    def _uplink_known_down(self) -> bool:
+        return self.uplink_online_hint is not None and self.uplink_online_hint() is False
+
+    def _build_cloud_payload(self, content: list[dict[str, Any]]) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self.cloud_model,
+            "messages": [{"role": "user", "content": content}],
+            "temperature": 0.0,
+            "max_tokens": DEFAULT_CLOUD_MAX_TOKENS,
+        }
+        if self.cloud_reasoning_effort:
+            payload["reasoning_effort"] = self.cloud_reasoning_effort
+        return payload
+
+    def prewarm_cloud_assessment(
+        self,
+        telemetry: GeometricTelemetry,
+        image_source: str | Path | Image.Image | np.ndarray | bytes | None = None,
+    ) -> bool:
+        """
+        Run a real Tier 1 Muse Spark call and store it in the response cache (no Tier 2/3
+        fallback), so the first on-stage click on a top choke point returns instantly.
+        """
+        if not self.api_key or self._uplink_known_down():
+            return False
+        key = self._cloud_cache_key(telemetry, image_source)
+        if key in self._cloud_cache:
+            return True
+        try:
+            self._cloud_cache[key] = self._call_tier1_cloud_sync(telemetry, image_source=image_source)
+        except Exception:
+            return False
+        return True
+
+    def warm_up_edge_model(self) -> dict[str, Any]:
+        """Load the Tier 2 weights ahead of time so the first offline request is fast."""
+        if self.mlx_runtime is None:
+            return {"resident": False, "skipped": "keep_mlx_resident disabled"}
+        self.mlx_runtime.ensure_loaded()
+        return self.mlx_runtime.status()
 
     def _build_vlm_prompt(self, telemetry: GeometricTelemetry) -> str:
         """Create a compact, telemetry-grounded prompt requesting strict JSON output."""
@@ -490,12 +635,7 @@ class VLMFailoverRouter:
                 }
             )
 
-        payload = {
-            "model": self.cloud_model,
-            "messages": [{"role": "user", "content": content}],
-            "temperature": 0.0,
-            "max_tokens": DEFAULT_CLOUD_MAX_TOKENS,
-        }
+        payload = self._build_cloud_payload(content)
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -542,12 +682,7 @@ class VLMFailoverRouter:
                 }
             )
 
-        payload = {
-            "model": self.cloud_model,
-            "messages": [{"role": "user", "content": content}],
-            "temperature": 0.0,
-            "max_tokens": DEFAULT_CLOUD_MAX_TOKENS,
-        }
+        payload = self._build_cloud_payload(content)
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -619,15 +754,13 @@ class VLMFailoverRouter:
                 if (
                     "PYTEST_CURRENT_TEST" in os.environ
                     and os.environ.get("FIRSTLIGHT_RUN_REAL_MLX_IN_TESTS") != "1"
+                    and (self.mlx_runtime is None or self.mlx_runtime.uses_default_loader)
                 ):
                     raise RuntimeError(
                         "Local 11B MLX weight load skipped in fast unit test; falling through to Tier 3 deterministic."
                     )
 
                 import tempfile
-                from mlx_vlm import generate, load
-                from mlx_vlm.prompt_utils import apply_chat_template
-                from mlx_vlm.utils import load_config
 
                 images_arg: list[str] | None = None
                 if isinstance(image_source, (str, Path)) and Path(image_source).exists():
@@ -643,24 +776,41 @@ class VLMFailoverRouter:
                         temp_img_path = Path(tf.name)
                     images_arg = [str(temp_img_path)]
 
-                config = load_config(str(self.local_mlx_model_path))
-                model, processor = load(str(self.local_mlx_model_path))
-                formatted_prompt = apply_chat_template(
-                    processor,
-                    config,
-                    prompt,
-                    num_images=len(images_arg) if images_arg else 0,
-                )
-                gen_res = generate(
-                    model,
-                    processor,
-                    formatted_prompt,
-                    image=images_arg,
-                    max_tokens=160,
-                    temp=0.0,
-                    verbose=False,
-                )
-                raw_output = gen_res.text if hasattr(gen_res, "text") else str(gen_res)
+                def _generate(mlx_model: Any, mlx_processor: Any, config: dict[str, Any]) -> str:
+                    from mlx_vlm import generate
+                    from mlx_vlm.prompt_utils import apply_chat_template
+
+                    formatted_prompt = apply_chat_template(
+                        mlx_processor,
+                        config,
+                        prompt,
+                        num_images=len(images_arg) if images_arg else 0,
+                    )
+                    gen_res = generate(
+                        mlx_model,
+                        mlx_processor,
+                        formatted_prompt,
+                        image=images_arg,
+                        max_tokens=160,
+                        temp=0.0,
+                        verbose=False,
+                    )
+                    return gen_res.text if hasattr(gen_res, "text") else str(gen_res)
+
+                if self.mlx_runtime is not None:
+                    # Resident weights stay loaded; only transient caches are released below.
+                    raw_output = self.mlx_runtime.run(_generate)
+                else:
+                    from mlx_vlm import load
+                    from mlx_vlm.utils import load_config
+
+                    from src.mlx_patches import apply_mllama_cross_attention_kv_memo
+
+                    apply_mllama_cross_attention_kv_memo()
+                    model, processor = load(str(self.local_mlx_model_path))
+                    raw_output = _generate(
+                        model, processor, load_config(str(self.local_mlx_model_path))
+                    )
 
             b_sev, r_sev, cue = parse_vlm_json_response(raw_output, telemetry)
         finally:
@@ -698,17 +848,28 @@ class VLMFailoverRouter:
         cue: str = ""
 
         # Step 1: Attempt Tier 1 (Cloud Primary) unless force_offline or forced to MLX/Deterministic
+        cloud_cache_hit = False
         if force_offline:
             fallback_chain.append("tier_1_cloud:bypassed:force_offline")
         elif self.mode in (FailoverMode.AUTO, FailoverMode.FORCE_CLOUD):
-            try:
-                b_sev, r_sev, cue = self._call_tier1_cloud_sync(
-                    telemetry, image_source=image_source, http_client=http_client
-                )
+            cache_key = self._cloud_cache_key(telemetry, image_source)
+            if self._uplink_known_down():
+                fallback_chain.append("tier_1_cloud:skipped:uplink_down")
+            elif cache_key in self._cloud_cache:
+                b_sev, r_sev, cue = self._cloud_cache[cache_key]
                 tier_used = ConnectivityTier.TIER_1_CLOUD
-                fallback_chain.append("tier_1_cloud:success")
-            except Exception as exc:
-                fallback_chain.append(_format_cloud_exception("tier_1_cloud", exc))
+                cloud_cache_hit = True
+                fallback_chain.append("tier_1_cloud:cache_hit")
+            else:
+                try:
+                    b_sev, r_sev, cue = self._call_tier1_cloud_sync(
+                        telemetry, image_source=image_source, http_client=http_client
+                    )
+                    self._cloud_cache[cache_key] = (b_sev, r_sev, cue)
+                    tier_used = ConnectivityTier.TIER_1_CLOUD
+                    fallback_chain.append("tier_1_cloud:success")
+                except Exception as exc:
+                    fallback_chain.append(_format_cloud_exception("tier_1_cloud", exc))
 
         # Step 2: Attempt Tier 2 (Local Apple Silicon MLX VLM) if Tier 1 did not succeed
         if b_sev is None and (
@@ -752,6 +913,7 @@ class VLMFailoverRouter:
             fallback_chain=fallback_chain,
             latency_ms=(time.perf_counter() - t0) * 1000.0,
             memory_cleared=memory_cleared,
+            cloud_cache_hit=cloud_cache_hit,
         )
 
     async def assess_damage_async(
@@ -775,17 +937,28 @@ class VLMFailoverRouter:
         r_sev: DamageSeverity | None = None
         cue: str = ""
 
+        cloud_cache_hit = False
         if force_offline:
             fallback_chain.append("tier_1_cloud:bypassed:force_offline")
         elif self.mode in (FailoverMode.AUTO, FailoverMode.FORCE_CLOUD):
-            try:
-                b_sev, r_sev, cue = await self._call_tier1_cloud_async(
-                    telemetry, image_source=image_source, async_client=async_client
-                )
+            cache_key = self._cloud_cache_key(telemetry, image_source)
+            if self._uplink_known_down():
+                fallback_chain.append("tier_1_cloud:skipped:uplink_down")
+            elif cache_key in self._cloud_cache:
+                b_sev, r_sev, cue = self._cloud_cache[cache_key]
                 tier_used = ConnectivityTier.TIER_1_CLOUD
-                fallback_chain.append("tier_1_cloud:success")
-            except Exception as exc:
-                fallback_chain.append(_format_cloud_exception("tier_1_cloud", exc))
+                cloud_cache_hit = True
+                fallback_chain.append("tier_1_cloud:cache_hit")
+            else:
+                try:
+                    b_sev, r_sev, cue = await self._call_tier1_cloud_async(
+                        telemetry, image_source=image_source, async_client=async_client
+                    )
+                    self._cloud_cache[cache_key] = (b_sev, r_sev, cue)
+                    tier_used = ConnectivityTier.TIER_1_CLOUD
+                    fallback_chain.append("tier_1_cloud:success")
+                except Exception as exc:
+                    fallback_chain.append(_format_cloud_exception("tier_1_cloud", exc))
 
         if b_sev is None and (
             force_offline
@@ -800,8 +973,10 @@ class VLMFailoverRouter:
                 pass
             else:
                 try:
-                    b_sev, r_sev, cue, memory_cleared = self._call_tier2_mlx(
-                        telemetry, image_source=image_source
+                    # Run the multi-second MLX generation off the event loop so live dispatch
+                    # streams to field phones keep flowing during an uplink outage.
+                    b_sev, r_sev, cue, memory_cleared = await asyncio.to_thread(
+                        self._call_tier2_mlx, telemetry, image_source
                     )
                     tier_used = ConnectivityTier.TIER_2_MLX
                     fallback_chain.append("tier_2_mlx:success")
@@ -827,6 +1002,7 @@ class VLMFailoverRouter:
             fallback_chain=fallback_chain,
             latency_ms=(time.perf_counter() - t0) * 1000.0,
             memory_cleared=memory_cleared,
+            cloud_cache_hit=cloud_cache_hit,
         )
 
     def _finalize_result(
@@ -840,6 +1016,7 @@ class VLMFailoverRouter:
         fallback_chain: list[str],
         latency_ms: float,
         memory_cleared: bool,
+        cloud_cache_hit: bool = False,
     ) -> DamageAssessmentResult:
         """Assemble the validated `DamageAssessmentResult` schema."""
         self.last_tier_used = tier_used
@@ -875,6 +1052,7 @@ class VLMFailoverRouter:
             fallback_chain=fallback_chain,
             latency_ms=round(latency_ms, 3),
             memory_cleared=memory_cleared,
+            cloud_cache_hit=cloud_cache_hit,
         )
 
 
