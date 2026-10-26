@@ -1186,6 +1186,9 @@ def build_edge_caliper_geojson(
     ray_half_width_m: float = DEFAULT_RAY_HALF_WIDTH_M,
     nominal_road_half_width_m: float = DEFAULT_NOMINAL_ROAD_HALF_WIDTH_M,
     utm_crs: str = TARGET_METRIC_CRS,
+    sam_confidence: float = 0.85,
+    canopy_or_shadow_occluded: bool = False,
+    mask_source: str = "sam-3.1",
 ) -> dict[str, Any]:
     """
     Build a GeoJSON FeatureCollection in EPSG:4326 (`WGS84`) for a road edge containing:
@@ -1208,6 +1211,9 @@ def build_edge_caliper_geojson(
         ray_half_width_m=ray_half_width_m,
         nominal_road_half_width_m=nominal_road_half_width_m,
         utm_crs=utm_crs,
+        sam_confidence=sam_confidence,
+        canopy_or_shadow_occluded=canopy_or_shadow_occluded,
+        mask_source=mask_source,
     )
 
     to_wgs84 = Transformer.from_crs(utm_crs, WGS84_CRS, always_xy=True)
@@ -1363,6 +1369,9 @@ def build_edge_caliper_geojson(
             "water_area_m2": round(clearance.water_area_m2, 3),
             "has_water_obstruction": clearance.has_water_obstruction,
             "passability": clearance.passability.to_dict(),
+            "sam_confidence": round(clearance.sam_confidence, 4),
+            "needs_drone_recon": clearance.needs_drone_recon,
+            "mask_source": clearance.mask_source,
             "reason": clearance.reason,
             "ray_count": len(clearance.cross_sections),
         },

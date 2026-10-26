@@ -438,3 +438,83 @@ def test_milestone7_benchmark_tiers_and_visual_storytelling_ui() -> None:
     assert "btn-fit-aoi" in html
 
 
+def test_phase3_ground_truth_benchmark_and_drone_recon_confidence() -> None:
+    """
+    Verify Phase 3 Ground-Truth Caliper & Building Benchmark metrics,
+    SAM 3.1 confidence & `needs_drone_recon` API propagation, UI badge presence,
+    and reproducibility verification script.
+    """
+    import json
+    from scripts.setup_data_and_models import verify_environment
+
+    project_root = Path(__file__).resolve().parent.parent
+    gt_path = project_root / "data" / "ground_truth_benchmark.json"
+    bench_path = project_root / "benchmarks" / "benchmark_results.json"
+
+    assert gt_path.exists()
+    assert bench_path.exists()
+
+    gt_data = json.loads(gt_path.read_text(encoding="utf-8"))
+    assert len(gt_data["road_cross_sections"]) == 15
+    assert len(gt_data["buildings"]) == 30
+
+    bench_data = json.loads(bench_path.read_text(encoding="utf-8"))
+    cal = bench_data["caliper_width_metrics"]
+    pass_acc = bench_data["vehicle_passability_accuracy"]
+    assert cal["sample_count"] == 15
+    assert 0.0 <= cal["mae_m"] <= 0.5
+    assert 0.0 <= cal["rmse_m"] <= 0.6
+    assert 0.8 <= pass_acc["atv_accuracy"] <= 1.0
+    assert 0.8 <= pass_acc["ambulance_accuracy"] <= 1.0
+    assert 0.8 <= pass_acc["fire_engine_accuracy"] <= 1.0
+
+    bldg = bench_data["building_damage_metrics"]
+    assert bldg["sample_count"] == 30
+    assert bldg["high_severity_accuracy"] >= 0.85
+    assert bldg["high_severity_f1"] >= 0.85
+
+    sam_tel = bench_data["sam31_confidence_and_recon_telemetry"]
+    assert sam_tel["baked_mask_polygons"] >= 50
+    assert 0.5 <= sam_tel["mean_sam_confidence"] <= 1.0
+    assert sam_tel["needs_drone_recon_count"] > 0
+
+    # Verify sam_confidence and needs_drone_recon in /api/layers, /api/route, and /api/choke-point/{edge_id}/caliper
+    layers_res = client.get("/api/layers")
+    assert layers_res.status_code == 200
+    road_props = layers_res.json()["roads"]["features"][0]["properties"]
+    assert "sam_confidence" in road_props
+    assert "needs_drone_recon" in road_props
+    assert isinstance(road_props["needs_drone_recon"], bool)
+
+    edge_id = road_props["edge_id"]
+    cal_res = client.get(f"/api/choke-point/{edge_id}/caliper")
+    assert cal_res.status_code == 200
+    cal_props = cal_res.json()["properties"]
+    assert "sam_confidence" in cal_props
+    assert "needs_drone_recon" in cal_props
+
+    route_res = client.post(
+        "/api/route",
+        json={
+            "origin": [-85.4205, 29.9485],
+            "destination": [-85.4050, 29.9365],
+            "vehicle_class": "atv",
+        },
+    )
+    assert route_res.status_code == 200
+    r_data = route_res.json()
+    if r_data["edge_steps"]:
+        assert "sam_confidence" in r_data["edge_steps"][0]
+        assert "needs_drone_recon" in r_data["edge_steps"][0]
+
+    # Verify UI elements for SAM 3.1 Confidence & Drone Recon Badge
+    html = client.get("/").text
+    assert "inspector-sam-conf-val" in html
+    assert "inspector-drone-recon-badge" in html
+
+    # Verify setup_data_and_models check passes
+    all_ok, _ = verify_environment()
+    assert all_ok is True
+
+
+

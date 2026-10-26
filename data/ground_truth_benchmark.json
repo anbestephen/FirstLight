@@ -1,0 +1,542 @@
+{
+  "benchmark_suite": "FirstLight Hurricane Michael Ground-Truth Benchmark (Mexico Beach, FL)",
+  "imagery_source": "NOAA National Geodetic Survey Post-Hurricane Michael Orthoimagery (data/noaa_michael_mexico_beach.tif)",
+  "metric_crs": "EPSG:32616",
+  "gsd_m_per_px": 0.2804,
+  "vehicle_thresholds_m": {
+    "atv": 1.2,
+    "ambulance": 2.2,
+    "fire_engine": 3.5
+  },
+  "road_cross_sections_count": 15,
+  "building_structures_count": 30,
+  "road_cross_sections": [
+    {
+      "sample_id": "gt-road-01",
+      "edge_id": "95800288-95800290-0",
+      "u": 95800288,
+      "v": 95800290,
+      "key": 0,
+      "road_name": "Segment 95800288-95800290",
+      "gsd_m_per_px": 0.2804,
+      "ground_truth_clear_pixels": 2,
+      "ground_truth_clear_width_m": 0.5608,
+      "has_water_obstruction": false,
+      "ground_truth_passability": {
+        "atv": false,
+        "ambulance": false,
+        "fire_engine": false
+      }
+    },
+    {
+      "sample_id": "gt-road-02",
+      "edge_id": "95808515-10052533625-0",
+      "u": 95808515,
+      "v": 10052533625,
+      "key": 0,
+      "road_name": "22nd Street",
+      "gsd_m_per_px": 0.2804,
+      "ground_truth_clear_pixels": 30,
+      "ground_truth_clear_width_m": 8.412,
+      "has_water_obstruction": false,
+      "ground_truth_passability": {
+        "atv": true,
+        "ambulance": true,
+        "fire_engine": true
+      }
+    },
+    {
+      "sample_id": "gt-road-03",
+      "edge_id": "95827826-95827833-0",
+      "u": 95827826,
+      "v": 95827833,
+      "key": 0,
+      "road_name": "Segment 95827826-95827833",
+      "gsd_m_per_px": 0.2804,
+      "ground_truth_clear_pixels": 5,
+      "ground_truth_clear_width_m": 1.402,
+      "has_water_obstruction": false,
+      "ground_truth_passability": {
+        "atv": true,
+        "ambulance": false,
+        "fire_engine": false
+      }
+    },
+    {
+      "sample_id": "gt-road-04",
+      "edge_id": "95827843-12293839499-0",
+      "u": 95827843,
+      "v": 12293839499,
+      "key": 0,
+      "road_name": "Segment 95827843-12293839499",
+      "gsd_m_per_px": 0.2804,
+      "ground_truth_clear_pixels": 29,
+      "ground_truth_clear_width_m": 8.1316,
+      "has_water_obstruction": false,
+      "ground_truth_passability": {
+        "atv": true,
+        "ambulance": true,
+        "fire_engine": true
+      }
+    },
+    {
+      "sample_id": "gt-road-05",
+      "edge_id": "95827855-4058598944-0",
+      "u": 95827855,
+      "v": 4058598944,
+      "key": 0,
+      "road_name": "Segment 95827855-4058598944",
+      "gsd_m_per_px": 0.2804,
+      "ground_truth_clear_pixels": 0,
+      "ground_truth_clear_width_m": 0.0,
+      "has_water_obstruction": true,
+      "ground_truth_passability": {
+        "atv": false,
+        "ambulance": false,
+        "fire_engine": false
+      }
+    },
+    {
+      "sample_id": "gt-road-06",
+      "edge_id": "95827863-95838490-0",
+      "u": 95827863,
+      "v": 95838490,
+      "key": 0,
+      "road_name": "33rd Street",
+      "gsd_m_per_px": 0.2804,
+      "ground_truth_clear_pixels": 28,
+      "ground_truth_clear_width_m": 7.8512,
+      "has_water_obstruction": false,
+      "ground_truth_passability": {
+        "atv": true,
+        "ambulance": true,
+        "fire_engine": true
+      }
+    },
+    {
+      "sample_id": "gt-road-07",
+      "edge_id": "95837313-95827859-0",
+      "u": 95837313,
+      "v": 95827859,
+      "key": 0,
+      "road_name": "29th Street",
+      "gsd_m_per_px": 0.2804,
+      "ground_truth_clear_pixels": 29,
+      "ground_truth_clear_width_m": 8.1316,
+      "has_water_obstruction": false,
+      "ground_truth_passability": {
+        "atv": true,
+        "ambulance": true,
+        "fire_engine": true
+      }
+    },
+    {
+      "sample_id": "gt-road-08",
+      "edge_id": "95841487-95837698-0",
+      "u": 95841487,
+      "v": 95837698,
+      "key": 0,
+      "road_name": "8th Street",
+      "gsd_m_per_px": 0.2804,
+      "ground_truth_clear_pixels": 2,
+      "ground_truth_clear_width_m": 0.5608,
+      "has_water_obstruction": false,
+      "ground_truth_passability": {
+        "atv": false,
+        "ambulance": false,
+        "fire_engine": false
+      }
+    },
+    {
+      "sample_id": "gt-road-09",
+      "edge_id": "95853569-95853337-0",
+      "u": 95853569,
+      "v": 95853337,
+      "key": 0,
+      "road_name": "Nannook Road",
+      "gsd_m_per_px": 0.2804,
+      "ground_truth_clear_pixels": 30,
+      "ground_truth_clear_width_m": 8.412,
+      "has_water_obstruction": false,
+      "ground_truth_passability": {
+        "atv": true,
+        "ambulance": true,
+        "fire_engine": true
+      }
+    },
+    {
+      "sample_id": "gt-road-10",
+      "edge_id": "1987589033-1987589038-0",
+      "u": 1987589033,
+      "v": 1987589038,
+      "key": 0,
+      "road_name": "Segment 1987589033-1987589038",
+      "gsd_m_per_px": 0.2804,
+      "ground_truth_clear_pixels": 28,
+      "ground_truth_clear_width_m": 7.8512,
+      "has_water_obstruction": false,
+      "ground_truth_passability": {
+        "atv": true,
+        "ambulance": true,
+        "fire_engine": true
+      }
+    },
+    {
+      "sample_id": "gt-road-11",
+      "edge_id": "1987589058-1987589023-0",
+      "u": 1987589058,
+      "v": 1987589023,
+      "key": 0,
+      "road_name": "Segment 1987589058-1987589023",
+      "gsd_m_per_px": 0.2804,
+      "ground_truth_clear_pixels": 29,
+      "ground_truth_clear_width_m": 8.1316,
+      "has_water_obstruction": false,
+      "ground_truth_passability": {
+        "atv": true,
+        "ambulance": true,
+        "fire_engine": true
+      }
+    },
+    {
+      "sample_id": "gt-road-12",
+      "edge_id": "10052490561-10052533680-0",
+      "u": 10052490561,
+      "v": 10052533680,
+      "key": 0,
+      "road_name": "Segment 10052490561-10052533680",
+      "gsd_m_per_px": 0.2804,
+      "ground_truth_clear_pixels": 0,
+      "ground_truth_clear_width_m": 0.0,
+      "has_water_obstruction": true,
+      "ground_truth_passability": {
+        "atv": false,
+        "ambulance": false,
+        "fire_engine": false
+      }
+    },
+    {
+      "sample_id": "gt-road-13",
+      "edge_id": "10052533530-10052533532-0",
+      "u": 10052533530,
+      "v": 10052533532,
+      "key": 0,
+      "road_name": "Segment 10052533530-10052533532",
+      "gsd_m_per_px": 0.2804,
+      "ground_truth_clear_pixels": 28,
+      "ground_truth_clear_width_m": 7.8512,
+      "has_water_obstruction": false,
+      "ground_truth_passability": {
+        "atv": true,
+        "ambulance": true,
+        "fire_engine": true
+      }
+    },
+    {
+      "sample_id": "gt-road-14",
+      "edge_id": "10052533584-95827855-0",
+      "u": 10052533584,
+      "v": 95827855,
+      "key": 0,
+      "road_name": "26th Street",
+      "gsd_m_per_px": 0.2804,
+      "ground_truth_clear_pixels": 2,
+      "ground_truth_clear_width_m": 0.5608,
+      "has_water_obstruction": false,
+      "ground_truth_passability": {
+        "atv": false,
+        "ambulance": false,
+        "fire_engine": false
+      }
+    },
+    {
+      "sample_id": "gt-road-15",
+      "edge_id": "10052533654-95827848-0",
+      "u": 10052533654,
+      "v": 95827848,
+      "key": 0,
+      "road_name": "Segment 10052533654-95827848",
+      "gsd_m_per_px": 0.2804,
+      "ground_truth_clear_pixels": 22,
+      "ground_truth_clear_width_m": 6.1688,
+      "has_water_obstruction": false,
+      "ground_truth_passability": {
+        "atv": true,
+        "ambulance": true,
+        "fire_engine": true
+      }
+    }
+  ],
+  "buildings": [
+    {
+      "sample_id": "gt-bldg-01",
+      "building_id": "bldg-0",
+      "sector_id": "sector-01",
+      "roof_luma_std": 28.06,
+      "roof_rubble_ratio": 0.124,
+      "ground_truth_severity": "major_damage",
+      "ground_truth_is_high_severity": true
+    },
+    {
+      "sample_id": "gt-bldg-02",
+      "building_id": "bldg-11",
+      "sector_id": "sector-01",
+      "roof_luma_std": 37.44,
+      "roof_rubble_ratio": 0.154,
+      "ground_truth_severity": "destroyed",
+      "ground_truth_is_high_severity": true
+    },
+    {
+      "sample_id": "gt-bldg-03",
+      "building_id": "bldg-22",
+      "sector_id": "sector-02",
+      "roof_luma_std": 33.28,
+      "roof_rubble_ratio": 0.035,
+      "ground_truth_severity": "major_damage",
+      "ground_truth_is_high_severity": true
+    },
+    {
+      "sample_id": "gt-bldg-04",
+      "building_id": "bldg-33",
+      "sector_id": "sector-02",
+      "roof_luma_std": 37.75,
+      "roof_rubble_ratio": 0.173,
+      "ground_truth_severity": "destroyed",
+      "ground_truth_is_high_severity": true
+    },
+    {
+      "sample_id": "gt-bldg-05",
+      "building_id": "bldg-44",
+      "sector_id": "sector-09",
+      "roof_luma_std": 36.63,
+      "roof_rubble_ratio": 0.064,
+      "ground_truth_severity": "major_damage",
+      "ground_truth_is_high_severity": true
+    },
+    {
+      "sample_id": "gt-bldg-06",
+      "building_id": "bldg-55",
+      "sector_id": "sector-09",
+      "roof_luma_std": 37.74,
+      "roof_rubble_ratio": 0.128,
+      "ground_truth_severity": "destroyed",
+      "ground_truth_is_high_severity": true
+    },
+    {
+      "sample_id": "gt-bldg-07",
+      "building_id": "bldg-66",
+      "sector_id": "sector-07",
+      "roof_luma_std": 34.24,
+      "roof_rubble_ratio": 0.029,
+      "ground_truth_severity": "major_damage",
+      "ground_truth_is_high_severity": true
+    },
+    {
+      "sample_id": "gt-bldg-08",
+      "building_id": "bldg-77",
+      "sector_id": "sector-06",
+      "roof_luma_std": 12.46,
+      "roof_rubble_ratio": 0.0,
+      "ground_truth_severity": "major_damage",
+      "ground_truth_is_high_severity": true
+    },
+    {
+      "sample_id": "gt-bldg-09",
+      "building_id": "bldg-88",
+      "sector_id": "sector-07",
+      "roof_luma_std": 16.66,
+      "roof_rubble_ratio": 0.0,
+      "ground_truth_severity": "no_damage",
+      "ground_truth_is_high_severity": false
+    },
+    {
+      "sample_id": "gt-bldg-10",
+      "building_id": "bldg-99",
+      "sector_id": "sector-04",
+      "roof_luma_std": 40.77,
+      "roof_rubble_ratio": 0.053,
+      "ground_truth_severity": "minor_damage",
+      "ground_truth_is_high_severity": false
+    },
+    {
+      "sample_id": "gt-bldg-11",
+      "building_id": "bldg-110",
+      "sector_id": "sector-04",
+      "roof_luma_std": 18.06,
+      "roof_rubble_ratio": 0.0,
+      "ground_truth_severity": "no_damage",
+      "ground_truth_is_high_severity": false
+    },
+    {
+      "sample_id": "gt-bldg-12",
+      "building_id": "bldg-121",
+      "sector_id": "sector-04",
+      "roof_luma_std": 15.21,
+      "roof_rubble_ratio": 0.0,
+      "ground_truth_severity": "no_damage",
+      "ground_truth_is_high_severity": false
+    },
+    {
+      "sample_id": "gt-bldg-13",
+      "building_id": "bldg-132",
+      "sector_id": "sector-02",
+      "roof_luma_std": 28.14,
+      "roof_rubble_ratio": 0.002,
+      "ground_truth_severity": "minor_damage",
+      "ground_truth_is_high_severity": false
+    },
+    {
+      "sample_id": "gt-bldg-14",
+      "building_id": "bldg-143",
+      "sector_id": "sector-02",
+      "roof_luma_std": 27.43,
+      "roof_rubble_ratio": 0.018,
+      "ground_truth_severity": "minor_damage",
+      "ground_truth_is_high_severity": false
+    },
+    {
+      "sample_id": "gt-bldg-15",
+      "building_id": "bldg-154",
+      "sector_id": "sector-01",
+      "roof_luma_std": 33.92,
+      "roof_rubble_ratio": 0.004,
+      "ground_truth_severity": "minor_damage",
+      "ground_truth_is_high_severity": false
+    },
+    {
+      "sample_id": "gt-bldg-16",
+      "building_id": "bldg-165",
+      "sector_id": "sector-01",
+      "roof_luma_std": 19.78,
+      "roof_rubble_ratio": 0.007,
+      "ground_truth_severity": "no_damage",
+      "ground_truth_is_high_severity": false
+    },
+    {
+      "sample_id": "gt-bldg-17",
+      "building_id": "bldg-176",
+      "sector_id": "sector-03",
+      "roof_luma_std": 24.79,
+      "roof_rubble_ratio": 0.001,
+      "ground_truth_severity": "minor_damage",
+      "ground_truth_is_high_severity": false
+    },
+    {
+      "sample_id": "gt-bldg-18",
+      "building_id": "bldg-187",
+      "sector_id": "sector-03",
+      "roof_luma_std": 24.04,
+      "roof_rubble_ratio": 0.002,
+      "ground_truth_severity": "minor_damage",
+      "ground_truth_is_high_severity": false
+    },
+    {
+      "sample_id": "gt-bldg-19",
+      "building_id": "bldg-198",
+      "sector_id": "sector-09",
+      "roof_luma_std": 37.85,
+      "roof_rubble_ratio": 0.021,
+      "ground_truth_severity": "major_damage",
+      "ground_truth_is_high_severity": true
+    },
+    {
+      "sample_id": "gt-bldg-20",
+      "building_id": "bldg-209",
+      "sector_id": "sector-10",
+      "roof_luma_std": 7.86,
+      "roof_rubble_ratio": 0.0,
+      "ground_truth_severity": "no_damage",
+      "ground_truth_is_high_severity": false
+    },
+    {
+      "sample_id": "gt-bldg-21",
+      "building_id": "bldg-220",
+      "sector_id": "sector-10",
+      "roof_luma_std": 32.24,
+      "roof_rubble_ratio": 0.032,
+      "ground_truth_severity": "destroyed",
+      "ground_truth_is_high_severity": true
+    },
+    {
+      "sample_id": "gt-bldg-22",
+      "building_id": "bldg-231",
+      "sector_id": "sector-09",
+      "roof_luma_std": 18.84,
+      "roof_rubble_ratio": 0.0,
+      "ground_truth_severity": "no_damage",
+      "ground_truth_is_high_severity": false
+    },
+    {
+      "sample_id": "gt-bldg-23",
+      "building_id": "bldg-242",
+      "sector_id": "sector-05",
+      "roof_luma_std": 36.1,
+      "roof_rubble_ratio": 0.124,
+      "ground_truth_severity": "major_damage",
+      "ground_truth_is_high_severity": true
+    },
+    {
+      "sample_id": "gt-bldg-24",
+      "building_id": "bldg-253",
+      "sector_id": "sector-05",
+      "roof_luma_std": 15.71,
+      "roof_rubble_ratio": 0.0,
+      "ground_truth_severity": "no_damage",
+      "ground_truth_is_high_severity": false
+    },
+    {
+      "sample_id": "gt-bldg-25",
+      "building_id": "bldg-264",
+      "sector_id": "sector-07",
+      "roof_luma_std": 63.31,
+      "roof_rubble_ratio": 0.412,
+      "ground_truth_severity": "destroyed",
+      "ground_truth_is_high_severity": true
+    },
+    {
+      "sample_id": "gt-bldg-26",
+      "building_id": "bldg-275",
+      "sector_id": "sector-07",
+      "roof_luma_std": 27.15,
+      "roof_rubble_ratio": 0.001,
+      "ground_truth_severity": "minor_damage",
+      "ground_truth_is_high_severity": false
+    },
+    {
+      "sample_id": "gt-bldg-27",
+      "building_id": "bldg-286",
+      "sector_id": "sector-06",
+      "roof_luma_std": 53.67,
+      "roof_rubble_ratio": 0.435,
+      "ground_truth_severity": "destroyed",
+      "ground_truth_is_high_severity": true
+    },
+    {
+      "sample_id": "gt-bldg-28",
+      "building_id": "bldg-297",
+      "sector_id": "sector-05",
+      "roof_luma_std": 19.3,
+      "roof_rubble_ratio": 0.0,
+      "ground_truth_severity": "minor_damage",
+      "ground_truth_is_high_severity": false
+    },
+    {
+      "sample_id": "gt-bldg-29",
+      "building_id": "bldg-308",
+      "sector_id": "sector-05",
+      "roof_luma_std": 41.09,
+      "roof_rubble_ratio": 0.215,
+      "ground_truth_severity": "destroyed",
+      "ground_truth_is_high_severity": true
+    },
+    {
+      "sample_id": "gt-bldg-30",
+      "building_id": "bldg-319",
+      "sector_id": "sector-09",
+      "roof_luma_std": 35.77,
+      "roof_rubble_ratio": 0.032,
+      "ground_truth_severity": "major_damage",
+      "ground_truth_is_high_severity": true
+    }
+  ]
+}

@@ -98,6 +98,8 @@ class RouteEdgeStep:
     water_overlap_ratio: float
     passable_for: dict[str, bool]
     instruction: str
+    sam_confidence: float = 0.78
+    needs_drone_recon: bool = False
     coordinates_lonlat: list[tuple[float, float]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -112,6 +114,8 @@ class RouteEdgeStep:
             "debris_area_sqm": round(self.debris_area_sqm, 2),
             "water_overlap_ratio": round(self.water_overlap_ratio, 4),
             "passable_for": self.passable_for,
+            "sam_confidence": round(self.sam_confidence, 4),
+            "needs_drone_recon": self.needs_drone_recon,
             "instruction": self.instruction,
             "coordinates_lonlat": [
                 [round(lon, 6), round(lat, 6)] for lon, lat in self.coordinates_lonlat
@@ -173,6 +177,8 @@ class ChokePointROIRecommendation:
     clearance_roi: float
     bottleneck_lonlat: tuple[float, float]
     explanation: str
+    sam_confidence: float = 0.78
+    needs_drone_recon: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -188,6 +194,8 @@ class ChokePointROIRecommendation:
             "debris_area_sqm": round(self.debris_area_sqm, 2),
             "water_overlap_ratio": round(self.water_overlap_ratio, 4),
             "gsd_m_per_px": round(self.gsd_m_per_px, 4),
+            "sam_confidence": round(self.sam_confidence, 4),
+            "needs_drone_recon": self.needs_drone_recon,
             "high_severity_structures_unlocked": self.high_severity_structures_unlocked,
             "newly_reachable_nodes": self.newly_reachable_nodes,
             "clearance_roi": round(self.clearance_roi, 4),
@@ -640,6 +648,8 @@ def compute_shortest_route(
             f"Proceed {seg_len_m:.1f}m on {seg_name} "
             f"(min clear width {seg_width_m:.2f}m, {seg_debris:.1f} m² debris)."
         )
+        seg_conf = float(edata.get("sam_confidence", 0.78))
+        seg_drone = bool(edata.get("needs_drone_recon", seg_conf < 0.70))
         edge_steps.append(
             RouteEdgeStep(
                 u=u,
@@ -653,6 +663,8 @@ def compute_shortest_route(
                 water_overlap_ratio=seg_water,
                 passable_for=passable_for,
                 instruction=instruction,
+                sam_confidence=seg_conf,
+                needs_drone_recon=seg_drone,
                 coordinates_lonlat=coords_lonlat,
             )
         )
@@ -898,6 +910,8 @@ def rank_choke_point_clearance_roi(
             f"(ROI: {roi:.4f} structures/m²)."
         )
 
+        sam_conf = float(data.get("sam_confidence", 0.78))
+        needs_drone = bool(data.get("needs_drone_recon", sam_conf < 0.70))
         recommendations.append(
             ChokePointROIRecommendation(
                 rank=0,
@@ -916,6 +930,8 @@ def rank_choke_point_clearance_roi(
                 clearance_roi=roi,
                 bottleneck_lonlat=(float(bottleneck_lonlat[0]), float(bottleneck_lonlat[1])),
                 explanation=explanation,
+                sam_confidence=sam_conf,
+                needs_drone_recon=needs_drone,
             )
         )
 

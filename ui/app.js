@@ -389,9 +389,26 @@
       if (cProps.min_clear_width_m !== undefined) {
         updateCaliperThresholdGauge(cProps.min_clear_width_m, Boolean(cProps.has_water_obstruction));
       }
+      updateSamConfidenceAndReconBadge(cProps.sam_confidence, cProps.needs_drone_recon);
       renderCaliperLayer(caliperGeojson, Boolean(zoomToCorridor));
     }
     await refreshMetaModelsTelemetry();
+  }
+
+  function updateSamConfidenceAndReconBadge(samConfidence, needsDroneRecon) {
+    const confValEl = document.getElementById("inspector-sam-conf-val");
+    const badgeEl = document.getElementById("inspector-drone-recon-badge");
+    if (confValEl && samConfidence !== undefined && samConfidence !== null) {
+      confValEl.textContent = Number(samConfidence).toFixed(2);
+    }
+    if (badgeEl && needsDroneRecon !== undefined && needsDroneRecon !== null) {
+      const flagged = Boolean(needsDroneRecon);
+      badgeEl.textContent = flagged
+        ? "[ DRONE RECON FLAGGED: Low Confidence / Canopy Occlusion ]"
+        : "[ HIGH CONFIDENCE GEOMETRY ]";
+      badgeEl.classList.toggle("flagged", flagged);
+      badgeEl.classList.toggle("high-conf", !flagged);
+    }
   }
 
   function renderCaliperLayer(caliperGeojson, zoomToCorridor) {
@@ -788,6 +805,9 @@
     document.getElementById("inspector-severity-row").innerHTML =
       `Building: <code>${data.building_damage_severity}</code> &bull; ` +
       `Road: <code>${data.road_damage_severity}</code>`;
+    if (data.sam_confidence !== undefined) {
+      updateSamConfidenceAndReconBadge(data.sam_confidence, data.needs_drone_recon);
+    }
     document.getElementById("inspector-rationale-text").textContent =
       data.passability_rationale || "";
 

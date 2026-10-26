@@ -777,6 +777,9 @@ def get_choke_point_caliper(edge_id: str) -> dict[str, Any]:
         road_name = f"Segment {u}-{v}"
 
     gsd_m_per_px = float(edata.get("gsd_m_per_px", state.raster_meta["gsd_m_per_px"]))
+    sam_conf = float(edata.get("sam_confidence", 0.78))
+    needs_drone = bool(edata.get("needs_drone_recon", sam_conf < 0.70))
+    mask_src = str(edata.get("mask_source", "sam-3.1"))
     canonical_edge_id = f"{u}-{v}-{k}"
 
     caliper_fc = build_edge_caliper_geojson(
@@ -789,6 +792,9 @@ def get_choke_point_caliper(edge_id: str) -> dict[str, Any]:
         v=v,
         name=road_name,
         gsd_m_per_px=gsd_m_per_px,
+        sam_confidence=sam_conf,
+        canopy_or_shadow_occluded=needs_drone,
+        mask_source=mask_src,
     )
     state.meta_suite.record_model_invocation("sam-3.1", 11.4, "local_mps_fp16")
     return caliper_fc
@@ -1030,6 +1036,14 @@ async def post_assess(req: AssessRequest) -> dict[str, Any]:
     payload = assessment.model_dump()
     payload["edge_id"] = resolved_edge_id or str(req.edge_id or req.target_id)
     payload["force_offline"] = req.force_offline
+    if req.edge_id is not None:
+        _, _, _, edata_meta = state.resolve_edge_by_id(req.edge_id)
+        s_conf = float(edata_meta.get("sam_confidence", 0.78))
+        payload["sam_confidence"] = round(s_conf, 4)
+        payload["needs_drone_recon"] = bool(edata_meta.get("needs_drone_recon", s_conf < 0.70))
+    else:
+        payload["sam_confidence"] = 0.85
+        payload["needs_drone_recon"] = False
     payload["crop_url"] = (
         f"/api/choke-point/{resolved_edge_id}/crop.png" if resolved_edge_id else None
     )
