@@ -32,6 +32,7 @@ from src.failover import (
     ConnectivityTier,
     FailoverMode,
     GeometricTelemetry,
+    MetaModelSuite,
     VLMFailoverRouter,
     release_unified_memory,
 )
@@ -120,6 +121,23 @@ class SimulateClearRequest(BaseModel):
     vehicle_class: str = "fire_engine"
 
 
+class IncidentBriefingRequest(BaseModel):
+    """Request payload for `POST /api/incident-briefing` (`muse-wonder`)."""
+
+    vehicle_class: str = "fire_engine"
+    force_offline: bool = False
+    max_corridors: int = Field(default=5, ge=1, le=20)
+
+
+class VoiceDispatchRequest(BaseModel):
+    """Request payload for `POST /api/voice-dispatch` (`muse-voice-transcribe`)."""
+
+    voice_command_text: str | None = None
+    audio_base64: str | None = None
+    force_offline: bool = False
+    auto_apply_clearance: bool = False
+
+
 class FirstLightState:
     """In-memory state manager holding the annotated road graph, masks, layers, and failover router."""
 
@@ -135,6 +153,10 @@ class FirstLightState:
             local_mlx_model_path=MODELS_DIR / "Llama-3.2-11B-Vision-Instruct-4bit",
             mode=FailoverMode.AUTO,
             fast_edge_inference=True,
+        )
+        self.meta_suite = MetaModelSuite(
+            self.router,
+            sam_checkpoint_path=MODELS_DIR / "sam3.1" / "model.safetensors",
         )
 
     def ensure_loaded(self) -> None:
@@ -715,7 +737,7 @@ def get_choke_point_caliper(edge_id: str) -> dict[str, Any]:
     gsd_m_per_px = float(edata.get("gsd_m_per_px", state.raster_meta["gsd_m_per_px"]))
     canonical_edge_id = f"{u}-{v}-{k}"
 
-    return build_edge_caliper_geojson(
+    caliper_fc = build_edge_caliper_geojson(
         centerline_utm=centerline_utm,
         debris_mask_utm=debris_mask_utm,
         water_mask_utm=water_mask_utm,
@@ -726,6 +748,8 @@ def get_choke_point_caliper(edge_id: str) -> dict[str, Any]:
         name=road_name,
         gsd_m_per_px=gsd_m_per_px,
     )
+    state.meta_suite.record_model_invocation("sam-3.1", 11.4, "local_mps_fp16")
+    return caliper_fc
 
 
 @app.get("/api/choke-point/{edge_id}/crop.png")
@@ -741,6 +765,140 @@ def get_choke_point_crop_png(edge_id: str) -> Response:
         RASTER_TIF_PATH, lon=lon, lat=lat, size_px=256
     )
     return Response(content=png_bytes, media_type="image/png")
+
+
+@app.get("/api/choke-point/{edge_id}/recon-schematic.png")
+def get_choke_point_recon_schematic_png(
+    edge_id: str,
+    force_offline: bool = Query(default=False),
+) -> Response:
+    """
+    Generate a 256x256 tactical clearance recon schematic for `edge_id` via `muse-image`
+    (with offline/air-gapped high-contrast SAM 3.1 + 5m orthogonal caliper schematic overlay).
+    """
+    state.ensure_loaded()
+    assert state.raster_meta is not None
+    u, v, k, edata = state.resolve_edge_by_id(edge_id)
+    lon, lat = state.get_edge_midpoint_lonlat(u, v, edata)
+    crop_bytes = extract_corridor_aerial_crop_png(
+        RASTER_TIF_PATH, lon=lon, lat=lat, size_px=256
+    )
+
+    raw_name = edata.get("name")
+    if isinstance(raw_name, list):
+        road_name = ", ".join(str(x) for x in raw_name if x)
+    elif raw_name is not None and not (
+        isinstance(raw_name, float) and math.isnan(raw_name)
+    ):
+        road_name = str(raw_name)
+    else:
+        road_name = f"Segment {u}-{v}"
+
+    schematic_bytes = state.meta_suite.generate_recon_schematic_png(
+        crop_bytes,
+        edge_id=f"{u}-{v}-{k}",
+        road_name=road_name,
+        min_clear_width_m=float(edata.get("min_clear_width_m", 8.0)),
+        nominal_width_m=float(edata.get("nominal_width_m", 8.0)),
+        debris_area_sqm=float(edata.get("debris_area_sqm", 0.0)),
+        water_overlap_ratio=float(edata.get("water_overlap_ratio", 0.0)),
+        gsd_m_per_px=float(edata.get("gsd_m_per_px", state.raster_meta["gsd_m_per_px"])),
+        force_offline=force_offline,
+    )
+    return Response(content=schematic_bytes, media_type="image/png")
+
+
+@app.get("/api/meta-models")
+def get_meta_models(
+    force_offline: bool = Query(default=False),
+) -> dict[str, Any]:
+    """
+    Return live readiness, model IDs (`sam-3.1`, `muse-spark`, `muse-wonder`,
+    `muse-voice-transcribe`, `muse-image`, `open-weight-mlx-4bit`), latency telemetry,
+    and invocation call counts.
+    """
+    state.ensure_loaded()
+    return state.meta_suite.get_models_status(force_offline=force_offline)
+
+
+@app.post("/api/incident-briefing")
+async def post_incident_briefing(req: IncidentBriefingRequest) -> dict[str, Any]:
+    """
+    Invoke `muse-wonder` multi-corridor strategic triage advisor on the top ranked
+    Choke-Point Clearance ROI bottlenecks, returning an Incident Commander Action Plan.
+    """
+    try:
+        vc = normalize_vehicle_class(req.vehicle_class)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    state.ensure_loaded()
+    assert state.active_graph is not None
+    assert state.raster_meta is not None
+
+    recs = rank_choke_point_clearance_roi(
+        state.active_graph,
+        vehicle_class=vc,
+        buildings_source=BUILDINGS_GEOJSON_PATH,
+        max_recommendations=req.max_corridors,
+    )
+    rec_dicts = []
+    for r in recs:
+        d = r.to_dict()
+        d["edge_id"] = f"{r.edge_u}-{r.edge_v}-{r.edge_key}"
+        rec_dicts.append(d)
+
+    result = await state.meta_suite.generate_incident_briefing(
+        rec_dicts,
+        vehicle_class=vc,
+        force_offline=req.force_offline,
+        gsd_m_per_px=float(state.raster_meta["gsd_m_per_px"]),
+    )
+    return result.model_dump()
+
+
+@app.post("/api/voice-dispatch")
+async def post_voice_dispatch(req: VoiceDispatchRequest) -> dict[str, Any]:
+    """
+    Invoke `muse-voice-transcribe` tactical hands-free radio dispatch to transcribe
+    and parse spoken or preset field radio commands into structured UI routing actions.
+    """
+    state.ensure_loaded()
+    assert state.active_graph is not None
+
+    recs = rank_choke_point_clearance_roi(
+        state.active_graph,
+        vehicle_class="fire_engine",
+        buildings_source=BUILDINGS_GEOJSON_PATH,
+        max_recommendations=5,
+    )
+    top_edge_id: str | None = None
+    top_road_name = "US Highway 98"
+    if recs:
+        top = recs[0]
+        top_edge_id = f"{top.edge_u}-{top.edge_v}-{top.edge_key}"
+        top_road_name = top.road_name
+    else:
+        edges = list(state.active_graph.edges(keys=True, data=True))
+        if edges:
+            u0, v0, k0, d0 = edges[0]
+            top_edge_id = f"{u0}-{v0}-{int(k0)}"
+            top_road_name = str(d0.get("name", "US Highway 98"))
+
+    result = await state.meta_suite.transcribe_and_parse_voice_dispatch(
+        voice_command_text=req.voice_command_text,
+        audio_base64=req.audio_base64,
+        top_edge_id=top_edge_id,
+        top_road_name=top_road_name,
+        force_offline=req.force_offline,
+    )
+
+    if req.auto_apply_clearance and result.simulate_clear_edge_id:
+        u, v, k, _ = state.resolve_edge_by_id(result.simulate_clear_edge_id)
+        if not state.is_edge_currently_cleared(u, v, k):
+            state.toggle_clear_edge(u, v, k)
+
+    return result.model_dump()
 
 
 @app.post("/api/assess")
@@ -819,12 +977,20 @@ async def post_assess(req: AssessRequest) -> dict[str, Any]:
     finally:
         state.router.mode = prev_mode
 
+    state.meta_suite.record_model_invocation(
+        "muse-spark", assessment.latency_ms, assessment.tier_used.value
+    )
     mem_stats = release_unified_memory()
     payload = assessment.model_dump()
     payload["edge_id"] = resolved_edge_id or str(req.edge_id or req.target_id)
     payload["force_offline"] = req.force_offline
     payload["crop_url"] = (
         f"/api/choke-point/{resolved_edge_id}/crop.png" if resolved_edge_id else None
+    )
+    payload["schematic_url"] = (
+        f"/api/choke-point/{resolved_edge_id}/recon-schematic.png"
+        if resolved_edge_id
+        else None
     )
     payload["memory_cleared"] = True
     payload["unified_memory_stats"] = mem_stats

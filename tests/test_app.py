@@ -288,3 +288,79 @@ def test_zero_cdn_static_asset_integrity_and_milestone5_controls() -> None:
         asset_res = client.get(asset_path)
         assert asset_res.status_code == 200, f"Failed to load local asset {asset_path}"
         assert len(asset_res.content) > 100
+
+
+def test_milestone6_meta_models_briefing_voice_and_schematic_endpoints() -> None:
+    """
+    Verify Milestone 6 endpoints (`GET /api/meta-models`, `POST /api/incident-briefing`,
+    `POST /api/voice-dispatch`, and `GET /api/choke-point/{edge_id}/recon-schematic.png`)
+    in both normal (`force_offline=False`) and Comms Blackout (`force_offline=True`) modes.
+    """
+    # 1. GET /api/meta-models
+    for offline_flag in (False, True):
+        m_res = client.get(f"/api/meta-models?force_offline={str(offline_flag).lower()}")
+        assert m_res.status_code == 200
+        m_data = m_res.json()
+        assert m_data["force_offline"] is offline_flag
+        assert m_data["total_models"] == 6
+        returned_ids = [m["model_id"] for m in m_data["models"]]
+        assert returned_ids == [
+            "sam-3.1",
+            "muse-spark",
+            "muse-wonder",
+            "muse-voice-transcribe",
+            "muse-image",
+            "open-weight-mlx-4bit",
+        ]
+
+    # 2. POST /api/incident-briefing (muse-wonder)
+    for offline_flag in (False, True):
+        b_res = client.post(
+            "/api/incident-briefing",
+            json={
+                "vehicle_class": "fire_engine",
+                "force_offline": offline_flag,
+                "max_corridors": 4,
+            },
+        )
+        assert b_res.status_code == 200
+        b_data = b_res.json()
+        assert b_data["model_id"] == "muse-wonder"
+        assert b_data["force_offline"] is offline_flag
+        assert len(b_data["sector_priorities"]) > 0
+        assert len(b_data["executive_summary"]) > 20
+        assert b_data["memory_cleared"] is True
+
+    # 3. POST /api/voice-dispatch (muse-voice-transcribe)
+    for offline_flag in (False, True):
+        v_res = client.post(
+            "/api/voice-dispatch",
+            json={
+                "voice_command_text": "Dispatch Fire Engine and simulate clearing top choke point on 15th Street",
+                "force_offline": offline_flag,
+                "auto_apply_clearance": False,
+            },
+        )
+        assert v_res.status_code == 200
+        v_data = v_res.json()
+        assert v_data["model_id"] == "muse-voice-transcribe"
+        assert v_data["force_offline"] is offline_flag
+        assert v_data["vehicle_class"] == "fire_engine"
+        assert v_data["simulate_clear_edge_id"] is not None
+        assert v_data["trigger_route"] is True
+
+    # 4. GET /api/choke-point/{edge_id}/recon-schematic.png (muse-image)
+    roi_res = client.get("/api/clearance-roi?vehicle_class=fire_engine")
+    top_rec = roi_res.json()["recommendations"][0]
+    edge_id = f"{top_rec['edge_u']}-{top_rec['edge_v']}-{top_rec['edge_key']}"
+
+    for offline_flag in (False, True):
+        s_res = client.get(
+            f"/api/choke-point/{edge_id}/recon-schematic.png?force_offline={str(offline_flag).lower()}"
+        )
+        assert s_res.status_code == 200
+        assert s_res.headers["content-type"] == "image/png"
+        assert s_res.content[:8] == b"\x89PNG\r\n\x1a\n"
+        img = Image.open(io.BytesIO(s_res.content))
+        assert img.size == (256, 256)
+

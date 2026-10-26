@@ -19,6 +19,7 @@
     lastRouteData: null,
     lastRoiRecommendations: [],
     activeEdgeId: null,
+    inspectorViewMode: "crop", // "crop" | "schematic"
     lastCaliperGeojson: null,
     boundsWgs84: [-85.4251, 29.9249, -85.3999, 29.9501],
     selectedSegment: null,
@@ -234,9 +235,27 @@
     }).addTo(state.roadsLayer);
   }
 
+  function updateInspectorImage() {
+    if (!state.activeEdgeId) return;
+    const cropImg = document.getElementById("inspector-crop-img");
+    const captionEl = document.getElementById("inspector-crop-caption");
+    const encodedId = encodeURIComponent(state.activeEdgeId);
+    if (state.inspectorViewMode === "schematic") {
+      cropImg.src = `/api/choke-point/${encodedId}/recon-schematic.png?force_offline=${Boolean(state.forceOffline)}`;
+      if (captionEl) {
+        captionEl.textContent = "Muse Image + SAM 3.1 Recon Schematic";
+      }
+    } else {
+      cropImg.src = `/api/choke-point/${encodedId}/crop.png`;
+      if (captionEl) {
+        captionEl.textContent = "256×256 NOAA GeoTIFF Crop";
+      }
+    }
+  }
+
   /**
    * Fetch 5m orthogonal caliper rays & SAM 3.1 masks for `edgeId`, render on map,
-   * load `/api/choke-point/{edgeId}/crop.png`, and run live 3-tier VLM assessment.
+   * load `/api/choke-point/{edgeId}/crop.png` or `/recon-schematic.png`, and run live 3-tier VLM assessment.
    */
   async function inspectCorridorByEdgeId(edgeId, zoomToCorridor) {
     if (!edgeId) return;
@@ -247,9 +266,7 @@
       card.classList.toggle("selected-corridor", card.getAttribute("data-edge-id") === state.activeEdgeId);
     });
 
-    // Update live 256x256 NOAA GeoTIFF aerial crop image immediately
-    const cropImg = document.getElementById("inspector-crop-img");
-    cropImg.src = `/api/choke-point/${encodeURIComponent(state.activeEdgeId)}/crop.png`;
+    updateInspectorImage();
 
     // Fetch caliper GeoJSON and VLM assessment concurrently
     const [caliperRes] = await Promise.all([
@@ -262,6 +279,7 @@
       state.lastCaliperGeojson = caliperGeojson;
       renderCaliperLayer(caliperGeojson, Boolean(zoomToCorridor));
     }
+    await refreshMetaModelsTelemetry();
   }
 
   function renderCaliperLayer(caliperGeojson, zoomToCorridor) {
@@ -749,6 +767,95 @@
     URL.revokeObjectURL(url);
   }
 
+  async function refreshMetaModelsTelemetry() {
+    try {
+      const res = await fetch(`/api/meta-models?force_offline=${Boolean(state.forceOffline)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      (data.models || []).forEach(function (m) {
+        const chip = document.querySelector(`.meta-model-chip[data-model="${m.model_id}"]`);
+        if (!chip) return;
+        chip.classList.toggle("edge-mode", Boolean(state.forceOffline));
+        const subEl = chip.querySelector(".chip-sub");
+        if (subEl) {
+          subEl.textContent = `${m.call_count}x (${m.last_latency_ms}ms)`;
+        }
+        chip.title = `${m.role} | Provider: ${m.provider} | Calls: ${m.call_count}`;
+      });
+    } catch (err) {
+      // Ignore offline telemetry fetch errors
+    }
+  }
+
+  async function runWonderBriefing() {
+    const boxEl = document.getElementById("wonder-briefing-box");
+    if (!boxEl) return;
+    boxEl.classList.remove("hidden");
+    boxEl.innerHTML = "Synthesizing Muse Wonder multi-corridor strategic triage plan...";
+
+    const res = await fetch("/api/incident-briefing", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        vehicle_class: state.vehicleClass,
+        force_offline: Boolean(state.forceOffline),
+        max_corridors: 5,
+      }),
+    });
+    const data = await res.json();
+    const sectorsHtml = (data.sector_priorities || [])
+      .slice(0, 3)
+      .map(function (sp) {
+        return `<div>&bull; <strong>#${sp.priority_rank} ${sp.road_name}:</strong> ${sp.equipment_assigned} (${sp.debris_area_sqm} m², ${sp.span_widening_m}, Unlocks ${sp.high_severity_structures_unlocked} bldg)</div>`;
+      })
+      .join("");
+
+    boxEl.innerHTML = `
+      <div><strong>Muse Wonder Action Plan (${formatTierLabel(data.tier_used)} &bull; ${data.latency_ms} ms):</strong></div>
+      <div>${data.executive_summary}</div>
+      ${sectorsHtml}
+    `;
+    await refreshMetaModelsTelemetry();
+  }
+
+  async function runVoiceDispatch() {
+    const statusEl = document.getElementById("voice-dispatch-status");
+    if (statusEl) {
+      statusEl.textContent = "Transcribing Tactical Radio via Muse Voice...";
+    }
+
+    const res = await fetch("/api/voice-dispatch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        voice_command_text:
+          "Dispatch Fire Engine and simulate clearing top choke point on US Highway 98",
+        force_offline: Boolean(state.forceOffline),
+        auto_apply_clearance: true,
+      }),
+    });
+    const data = await res.json();
+
+    if (statusEl) {
+      statusEl.textContent = `"${data.transcript}" (${data.latency_ms}ms)`;
+      statusEl.title = data.action_summary || data.transcript;
+    }
+
+    if (data.vehicle_class) {
+      state.vehicleClass = data.vehicle_class;
+      document.querySelectorAll(".vehicle-btn").forEach(function (b) {
+        b.classList.toggle("active", b.getAttribute("data-vehicle") === state.vehicleClass);
+      });
+    }
+
+    await loadInitialLayers();
+    await Promise.all([refreshRoute(), refreshClearanceRoi()]);
+    if (data.inspect_edge_id) {
+      await inspectCorridorByEdgeId(data.inspect_edge_id, true);
+    }
+    await refreshMetaModelsTelemetry();
+  }
+
   function switchTab(tabId) {
     document.querySelectorAll(".panel-tab").forEach(function (btn) {
       btn.classList.toggle("active", btn.getAttribute("data-tab") === tabId);
@@ -842,6 +949,38 @@
       const targetEdge = state.activeEdgeId || "0";
       runVlmAssessmentForEdge(targetEdge);
     });
+
+    const btnCrop = document.getElementById("btn-view-crop");
+    const btnSchematic = document.getElementById("btn-view-schematic");
+    if (btnCrop && btnSchematic) {
+      btnCrop.addEventListener("click", function () {
+        state.inspectorViewMode = "crop";
+        btnCrop.classList.add("active");
+        btnSchematic.classList.remove("active");
+        updateInspectorImage();
+      });
+      btnSchematic.addEventListener("click", async function () {
+        state.inspectorViewMode = "schematic";
+        btnSchematic.classList.add("active");
+        btnCrop.classList.remove("active");
+        updateInspectorImage();
+        await refreshMetaModelsTelemetry();
+      });
+    }
+
+    const btnWonder = document.getElementById("btn-wonder-briefing");
+    if (btnWonder) {
+      btnWonder.addEventListener("click", function () {
+        runWonderBriefing();
+      });
+    }
+
+    const btnVoice = document.getElementById("btn-voice-dispatch");
+    if (btnVoice) {
+      btnVoice.addEventListener("click", function () {
+        runVoiceDispatch();
+      });
+    }
   }
 
   document.addEventListener("DOMContentLoaded", async function () {
@@ -849,6 +988,6 @@
     bindUiEvents();
     await fetchHealth();
     await loadInitialLayers();
-    await Promise.all([refreshRoute(), refreshClearanceRoi()]);
+    await Promise.all([refreshRoute(), refreshClearanceRoi(), refreshMetaModelsTelemetry()]);
   });
 })();

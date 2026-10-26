@@ -112,3 +112,23 @@ All 5 phases (Phase 0 through Milestone 4) have been implemented and verified:
    - Added `[ Show SAM 3.1 Masks & 5m Caliper Rays ]` toggle that renders color-coded 5m orthogonal measurement rays (green $\ge 3.5\text{m}$, amber $1.2\text{–}3.5\text{m}$, red at the minimum pinch point) and SAM 3.1 debris/water polygon masks when any choke point or road is clicked.
    - Added the **Corridor AI Inspector** dock displaying the live `/api/choke-point/{edge_id}/crop.png` aerial patch, exact `clear_width_m` pinch-point caliper reading, active Tier badge, `latency_ms`, and VLM damage rationale.
    - Added `[ Export Field Manifest (GeoJSON) ]` button to download the active route, turn-by-turn steps, and top ROI choke points as a local `.geojson` file.
+
+---
+
+## Milestone 6: Full Meta AI Model Suite Expansion
+
+### Implemented Features & Endpoints
+1. **`MetaModelSuite` Orchestrator ([failover.py](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/src/failover.py#L832-L1381)) & `GET /api/meta-models` ([app.py](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/src/app.py#L815-L826)):**
+   - Exposes live status, role descriptions, invocation call counts, and latency telemetry across all 6 Meta AI disaster response models (`sam-3.1`, `muse-spark`, `muse-wonder`, `muse-voice-transcribe`, `muse-image`, and `open-weight-mlx-4bit`).
+2. **`muse-wonder` Multi-Corridor Strategic Triage Advisor (`POST /api/incident-briefing` — [app.py](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/src/app.py#L829-L863)):**
+   - Synthesizes an executive Incident Commander Action Plan from the top ranked Choke-Point Clearance ROI bottlenecks (`high_severity_structures_unlocked / debris_area_sqm`), assigning heavy clearance equipment (`Heavy Front-End Loader + Grapple Team` vs. `Wheeled Skid-Steer + Chainsaw Sawyers`) with `2.5s` Cloud timeout and automatic Apple Silicon Edge/Deterministic failover.
+3. **`muse-voice-transcribe` Tactical Hands-Free Radio Dispatch (`POST /api/voice-dispatch` — [app.py](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/src/app.py#L866-L906)):**
+   - Transcribes and parses spoken or preset field radio commands (e.g., `"Dispatch Fire Engine and simulate clearing top choke point on US Highway 98"`) into structured UI routing actions (`vehicle_class`, `simulate_clear_edge_id`, `inspect_edge_id`, `transcript`, `tier_used`).
+4. **`muse-image` Tactical Clearance Recon Schematic (`GET /api/choke-point/{edge_id}/recon-schematic.png` — [app.py](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/src/app.py#L772-L812)):**
+   - Calls `muse-image` when online or generates a high-contrast `256×256` annotated tactical caliper + SAM 3.1 schematic overlay PNG using Pillow/Rasterio when offline/air-gapped.
+5. **UI Telemetry Strip, Voice PTT & Recon Schematic Toggle ([index.html](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/ui/index.html), [app.js](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/ui/app.js), [style.css](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/ui/style.css)):**
+   - Added the **Meta AI 6-Model Telemetry Strip** displaying live status chips for `SAM 3.1`, `Muse Spark`, `Muse Wonder`, `Muse Voice`, `Muse Image`, and `Edge MLX`.
+   - Added `[ Push-to-Talk: Muse Voice Dispatch ]` tactical radio button, `[ Generate Muse Wonder Incident Briefing ]` advisor button, and `NOAA Crop` vs. `Muse Image Schematic` toggle tabs in the Corridor AI Inspector Dock.
+6. **End-to-End Verification ([test_failover.py](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/tests/test_failover.py), [test_app.py](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/tests/test_app.py)):**
+   - **40/40 pytest tests passing** across `test_geometry.py`, `test_failover.py`, `test_routing.py`, and `test_app.py` with zero external CDN dependencies.
+

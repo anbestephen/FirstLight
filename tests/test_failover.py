@@ -20,6 +20,7 @@ from src.failover import (
     ConnectivityTier,
     FailoverMode,
     GeometricTelemetry,
+    MetaModelSuite,
     VLMFailoverRouter,
     evaluate_deterministic_tier3,
     normalize_damage_severity,
@@ -319,3 +320,87 @@ def test_normalize_damage_severity_and_memory_hygiene() -> None:
     mem_stats = release_unified_memory()
     assert mem_stats["cleared"] is True
     assert mem_stats["mlx_active_memory_bytes"] >= 0
+
+
+async def test_meta_model_suite_wonder_voice_and_image_failover() -> None:
+    """
+    Verify Milestone 6 MetaModelSuite (`muse-wonder`, `muse-voice-transcribe`,
+    `muse-image`, and `get_models_status`) across both mocked Cloud Tier 1 and
+    offline Edge/Deterministic failover modes.
+    """
+    import io
+
+    router = VLMFailoverRouter(
+        api_key="test-meta-key",
+        local_mlx_model_path="models/Llama-3.2-11B-Vision-Instruct-4bit",
+    )
+    suite = MetaModelSuite(router)
+
+    # 1. Verify all 6 models are reported in get_models_status
+    status = suite.get_models_status(force_offline=False)
+    assert status["total_models"] == 6
+    model_ids = [m["model_id"] for m in status["models"]]
+    assert model_ids == [
+        "sam-3.1",
+        "muse-spark",
+        "muse-wonder",
+        "muse-voice-transcribe",
+        "muse-image",
+        "open-weight-mlx-4bit",
+    ]
+
+    sample_recs = [
+        {
+            "edge_id": "10-20-0",
+            "road_name": "US Highway 98",
+            "debris_area_sqm": 28.4,
+            "high_severity_structures_unlocked": 6,
+            "clearance_roi": 0.2113,
+            "current_clear_width_m": 2.1,
+            "restored_clear_width_m": 8.0,
+        }
+    ]
+
+    # 2. Test muse-wonder in force_offline=True mode
+    briefing_offline = await suite.generate_incident_briefing(
+        sample_recs,
+        vehicle_class="fire_engine",
+        force_offline=True,
+    )
+    assert briefing_offline.model_id == "muse-wonder"
+    assert briefing_offline.force_offline is True
+    assert briefing_offline.tier_used in (
+        ConnectivityTier.TIER_2_MLX,
+        ConnectivityTier.TIER_3_DETERMINISTIC,
+    )
+    assert briefing_offline.total_structures_unlockable == 6
+    assert "US Highway 98" in briefing_offline.executive_summary
+
+    # 3. Test muse-voice-transcribe in force_offline=True mode
+    voice_offline = await suite.transcribe_and_parse_voice_dispatch(
+        voice_command_text="Dispatch Ambulance and clear top choke point on 15th Street",
+        top_edge_id="10-20-0",
+        top_road_name="15th Street",
+        force_offline=True,
+    )
+    assert voice_offline.model_id == "muse-voice-transcribe"
+    assert voice_offline.vehicle_class == "ambulance"
+    assert voice_offline.simulate_clear_edge_id == "10-20-0"
+
+    # 4. Test muse-image tactical schematic PNG generation in offline mode
+    img = Image.new("RGB", (256, 256), color=(40, 60, 80))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    schematic_bytes = suite.generate_recon_schematic_png(
+        buf.getvalue(),
+        edge_id="10-20-0",
+        road_name="US Highway 98",
+        min_clear_width_m=2.1,
+        nominal_width_m=8.0,
+        debris_area_sqm=28.4,
+        force_offline=True,
+    )
+    assert schematic_bytes[:8] == b"\x89PNG\r\n\x1a\n"
+    out_img = Image.open(io.BytesIO(schematic_bytes))
+    assert out_img.size == (256, 256)
+

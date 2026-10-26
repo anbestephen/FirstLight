@@ -59,6 +59,37 @@
     </div>
   </header>
 
+  <!-- Meta AI 6-Model Telemetry Strip & Tactical Voice Radio Bar -->
+  <section class="meta-telemetry-strip" id="meta-telemetry-strip" aria-label="Meta AI Model Suite Telemetry">
+    <div class="meta-models-group" id="meta-models-badges">
+      <span class="meta-suite-label">META AI SUITE:</span>
+      <span class="meta-model-chip active" data-model="sam-3.1" id="chip-sam-3-1">
+        <strong>SAM 3.1</strong> <em class="chip-sub">MPS fp16</em>
+      </span>
+      <span class="meta-model-chip active" data-model="muse-spark" id="chip-muse-spark">
+        <strong>Muse Spark</strong> <em class="chip-sub">VLM Triage</em>
+      </span>
+      <span class="meta-model-chip active" data-model="muse-wonder" id="chip-muse-wonder">
+        <strong>Muse Wonder</strong> <em class="chip-sub">Cmd Advisor</em>
+      </span>
+      <span class="meta-model-chip active" data-model="muse-voice-transcribe" id="chip-muse-voice">
+        <strong>Muse Voice</strong> <em class="chip-sub">Radio PTT</em>
+      </span>
+      <span class="meta-model-chip active" data-model="muse-image" id="chip-muse-image">
+        <strong>Muse Image</strong> <em class="chip-sub">Recon Overlay</em>
+      </span>
+      <span class="meta-model-chip active" data-model="open-weight-mlx-4bit" id="chip-edge-mlx">
+        <strong>Edge MLX</strong> <em class="chip-sub">Llama-3.2-11B-4bit</em>
+      </span>
+    </div>
+    <div class="voice-radio-controls">
+      <button type="button" class="action-btn btn-voice-ptt" id="btn-voice-dispatch" title="Trigger Muse Voice Tactical Radio Dispatch">
+        &#x1F399; Push-to-Talk: Muse Voice Dispatch
+      </button>
+      <span class="voice-transcript-pill" id="voice-dispatch-status">Radio Standby (Hands-Free Ready)</span>
+    </div>
+  </section>
+
   <!-- Main Responsive Workspace -->
   <main class="workspace">
     <!-- Map Viewport -->
@@ -140,6 +171,14 @@
         </div>
         <div class="inspector-body">
           <div class="crop-frame">
+            <div class="crop-mode-tabs" role="tablist" aria-label="Corridor Visual Mode">
+              <button type="button" class="crop-tab-btn active" id="btn-view-crop" data-view="crop">
+                NOAA Crop
+              </button>
+              <button type="button" class="crop-tab-btn" id="btn-view-schematic" data-view="schematic">
+                Muse Image Schematic
+              </button>
+            </div>
             <img id="inspector-crop-img" src="/api/raster-preview.png" alt="NOAA 256x256 Corridor Aerial Patch" />
             <div class="crop-caption" id="inspector-crop-caption">256&times;256 NOAA GeoTIFF Crop</div>
           </div>
@@ -176,6 +215,12 @@
 
       <!-- Tab 1: Choke-Point Clearance ROI Priority Queue -->
       <div class="tab-content active" id="tab-roi">
+        <div class="wonder-briefing-bar">
+          <button type="button" class="action-btn btn-wonder" id="btn-wonder-briefing">
+            &#x26A1; Generate Muse Wonder Incident Briefing
+          </button>
+          <div class="wonder-briefing-box hidden" id="wonder-briefing-box"></div>
+        </div>
         <div class="panel-header-note">
           Ranked strictly by <strong>Structures Unlocked / m&sup2; Debris Cleared</strong>.
           Click a card to render <strong>5m Caliper Rays</strong> &amp; aerial crop, or tap <em>Simulate Clearance</em>.
