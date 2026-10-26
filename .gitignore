@@ -14,4 +14,3 @@ data/*.tiff
 # Environment Secrets & OS files
 .env
 .DS_Store
-EOF

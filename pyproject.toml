@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "firstlight"
+version = "0.1.0"
+description = "Offline-resilient disaster road clearance measurement, 3-tier VLM triage, and multi-class emergency vehicle routing on Apple Silicon."
+readme = "PLAN.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Anbesa Tech LLC" }
+]
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.9.0",
+    "python-multipart>=0.0.9",
+    "torch>=2.4.0",
+    "torchvision>=0.19.0",
+    "mlx>=0.18.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "mlx-vlm>=0.1.4; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "transformers>=4.45.0",
+    "huggingface-hub>=0.25.0",
+    "pillow>=10.4.0",
+    "rasterio>=1.4.0",
+    "geopandas>=1.0.1",
+    "shapely>=2.0.6",
+    "osmnx>=1.9.4",
+    "networkx>=3.3",
+    "pyproj>=3.7.0",
+    "scipy>=1.14.0",
+    "numpy>=1.26.4",
+    "matplotlib>=3.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
