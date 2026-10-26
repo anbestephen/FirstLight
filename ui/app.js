@@ -8,12 +8,18 @@
 
   const state = {
     vehicleClass: "fire_engine",
+    forceOffline: false,
+    showCaliperRays: true,
     origin: null,
     destination: null,
     pickMode: null, // "origin" | "destination" | null
     clearedEdges: [],
     roadsGeojson: null,
     buildingsGeojson: null,
+    lastRouteData: null,
+    lastRoiRecommendations: [],
+    activeEdgeId: null,
+    lastCaliperGeojson: null,
     boundsWgs84: [-85.4251, 29.9249, -85.3999, 29.9501],
     selectedSegment: null,
     map: null,
@@ -21,6 +27,7 @@
     buildingsLayer: null,
     roadsLayer: null,
     routeLayer: null,
+    caliperLayer: null,
     markersLayer: null,
   };
 
@@ -29,6 +36,17 @@
     ambulance: "Ambulance / Pickup (>=2.2m)",
     fire_engine: "Fire Engine (>=3.5m)",
   };
+
+  function formatTierLabel(tierCode) {
+    const t = String(tierCode || "").toLowerCase();
+    if (t.includes("tier_1")) {
+      return "Tier 1: Meta Cloud API";
+    }
+    if (t.includes("tier_2")) {
+      return "Tier 2: Apple Silicon MLX 4-bit";
+    }
+    return "Tier 3: Deterministic";
+  }
 
   function initMap() {
     const centerLat = 29.9415;
@@ -45,6 +63,7 @@
     state.buildingsLayer = L.layerGroup().addTo(map);
     state.roadsLayer = L.layerGroup().addTo(map);
     state.routeLayer = L.layerGroup().addTo(map);
+    state.caliperLayer = L.layerGroup().addTo(map);
     state.markersLayer = L.layerGroup().addTo(map);
 
     map.on("click", function (ev) {
@@ -90,17 +109,15 @@
       const data = await res.json();
 
       const netPill = document.getElementById("network-status-text");
-      netPill.textContent = data.offline_ready ? "LOCAL WI-FI / OFFLINE READY" : "ONLINE";
+      netPill.textContent = state.forceOffline
+        ? "COMMS BLACKOUT (EDGE ONLY)"
+        : data.offline_ready
+        ? "LOCAL WI-FI / OFFLINE READY"
+        : "ONLINE";
 
       const tierBadge = document.getElementById("vlm-tier-badge");
-      const lastTier = (data.vlm_tiers && data.vlm_tiers.last_tier_used) || "";
-      if (lastTier.includes("tier_1")) {
-        tierBadge.textContent = "TIER 1: CLOUD META API";
-      } else if (lastTier.includes("tier_2")) {
-        tierBadge.textContent = "TIER 2: EDGE MLX-VLM (4-BIT)";
-      } else {
-        tierBadge.textContent = "TIER 3: DETERMINISTIC GEOM";
-      }
+      const activeTier = (data.vlm_tiers && data.vlm_tiers.active_tier) || "";
+      tierBadge.textContent = formatTierLabel(activeTier).toUpperCase();
 
       const gsd = data.geospatial ? data.geospatial.gsd_m_per_px : 0.2804;
       const hwBadge = document.getElementById("hw-status-badge");
@@ -203,7 +220,8 @@
         layer.on("click", function () {
           const p = feature.properties || {};
           state.selectedSegment = p;
-          runVlmAssessmentForSegment(p);
+          const edgeId = p.edge_id || `${p.u}-${p.v}-${p.key || 0}`;
+          inspectCorridorByEdgeId(edgeId, true);
         });
         const p = feature.properties || {};
         layer.bindTooltip(
@@ -214,6 +232,120 @@
         );
       },
     }).addTo(state.roadsLayer);
+  }
+
+  /**
+   * Fetch 5m orthogonal caliper rays & SAM 3.1 masks for `edgeId`, render on map,
+   * load `/api/choke-point/{edgeId}/crop.png`, and run live 3-tier VLM assessment.
+   */
+  async function inspectCorridorByEdgeId(edgeId, zoomToCorridor) {
+    if (!edgeId) return;
+    state.activeEdgeId = String(edgeId);
+
+    // Highlight selected card in ROI list if present
+    document.querySelectorAll(".roi-card").forEach(function (card) {
+      card.classList.toggle("selected-corridor", card.getAttribute("data-edge-id") === state.activeEdgeId);
+    });
+
+    // Update live 256x256 NOAA GeoTIFF aerial crop image immediately
+    const cropImg = document.getElementById("inspector-crop-img");
+    cropImg.src = `/api/choke-point/${encodeURIComponent(state.activeEdgeId)}/crop.png`;
+
+    // Fetch caliper GeoJSON and VLM assessment concurrently
+    const [caliperRes] = await Promise.all([
+      fetch(`/api/choke-point/${encodeURIComponent(state.activeEdgeId)}/caliper`),
+      runVlmAssessmentForEdge(state.activeEdgeId),
+    ]);
+
+    if (caliperRes.ok) {
+      const caliperGeojson = await caliperRes.json();
+      state.lastCaliperGeojson = caliperGeojson;
+      renderCaliperLayer(caliperGeojson, Boolean(zoomToCorridor));
+    }
+  }
+
+  function renderCaliperLayer(caliperGeojson, zoomToCorridor) {
+    state.caliperLayer.clearLayers();
+    if (!caliperGeojson || !state.showCaliperRays) {
+      return;
+    }
+
+    const props = caliperGeojson.properties || {};
+    const caliperReadingEl = document.getElementById("inspector-caliper-reading");
+    if (caliperReadingEl && props.min_clear_width_m !== undefined) {
+      caliperReadingEl.innerHTML =
+        `Pinch Span: <strong>${Number(props.min_clear_width_m).toFixed(2)}m</strong> ` +
+        `at station ${Number(props.pinch_point_station_m || 0).toFixed(1)}m ` +
+        `(${props.ray_count || 0} rays @ ${props.gsd_m_per_px} m/px)`;
+    }
+
+    const geojsonLayer = L.geoJSON(caliperGeojson, {
+      style: function (feature) {
+        const fp = feature.properties || {};
+        if (fp.feature_type === "road_corridor") {
+          return {
+            color: "#38bdf8",
+            fillColor: "#0284c7",
+            weight: 1,
+            fillOpacity: 0.14,
+            dashArray: "3, 3",
+          };
+        }
+        if (fp.feature_type === "debris_mask") {
+          return {
+            color: "#ea580c",
+            fillColor: "#f97316",
+            weight: 2,
+            fillOpacity: 0.55,
+          };
+        }
+        if (fp.feature_type === "water_mask") {
+          return {
+            color: "#9333ea",
+            fillColor: "#a855f7",
+            weight: 2,
+            fillOpacity: 0.6,
+          };
+        }
+        if (fp.feature_type === "caliper_ray") {
+          const w = Number(fp.clear_width_m || 0);
+          if (fp.is_pinch_point || fp.water_intersected || w < 1.2) {
+            return { color: "#ef4444", weight: 5, opacity: 1.0 };
+          }
+          if (w >= 3.5) {
+            return { color: "#10b981", weight: 3, opacity: 0.9 };
+          }
+          return { color: "#f59e0b", weight: 3.5, opacity: 0.95 };
+        }
+        return { color: "#94a3b8", weight: 2 };
+      },
+      onEachFeature: function (feature, layer) {
+        const fp = feature.properties || {};
+        if (fp.feature_type === "caliper_ray") {
+          const badge = fp.is_pinch_point ? " [MIN PINCH POINT]" : "";
+          layer.bindTooltip(
+            `<strong>5m Caliper Ray @ ${fp.station_m}m${badge}</strong><br/>` +
+            `Clear Width: <strong>${fp.clear_width_m}m</strong><br/>` +
+            `ATV: ${fp.atv ? "PASS" : "BLOCKED"} | Amb: ${fp.ambulance ? "PASS" : "BLOCKED"} | Fire: ${fp.fire_engine ? "PASS" : "BLOCKED"}`,
+            { sticky: true }
+          );
+        } else if (fp.feature_type === "debris_mask") {
+          layer.bindTooltip(
+            `<strong>SAM 3.1 Debris Mask</strong><br/>Area: ${fp.area_m2} m² (GSD: ${fp.gsd_m_per_px} m/px)`,
+            { sticky: true }
+          );
+        } else if (fp.feature_type === "water_mask") {
+          layer.bindTooltip(
+            `<strong>SAM 3.1 Standing Water Mask</strong><br/>Area: ${fp.area_m2} m² (Weight = &infin;)`,
+            { sticky: true }
+          );
+        }
+      },
+    }).addTo(state.caliperLayer);
+
+    if (zoomToCorridor && geojsonLayer.getBounds && geojsonLayer.getBounds().isValid()) {
+      state.map.fitBounds(geojsonLayer.getBounds().pad(0.45), { maxZoom: 18 });
+    }
   }
 
   async function refreshRoute() {
@@ -233,6 +365,7 @@
       body: JSON.stringify(payload),
     });
     const routeData = await res.json();
+    state.lastRouteData = routeData;
     renderRouteOnMap(routeData);
     renderRouteBanner(routeData);
     renderTurnByTurnSteps(routeData.edge_steps || []);
@@ -338,7 +471,15 @@
   async function refreshClearanceRoi() {
     const res = await fetch(`/api/clearance-roi?vehicle_class=${encodeURIComponent(state.vehicleClass)}`);
     const data = await res.json();
-    renderRoiQueue(data.recommendations || []);
+    state.lastRoiRecommendations = data.recommendations || [];
+    renderRoiQueue(state.lastRoiRecommendations);
+
+    // Automatically inspect Rank #1 choke point on initial load so caliper rays & crop are visible immediately
+    if (!state.activeEdgeId && state.lastRoiRecommendations.length > 0) {
+      const top = state.lastRoiRecommendations[0];
+      const topEdgeId = top.edge_id || `${top.edge_u}-${top.edge_v}-${top.edge_key}`;
+      inspectCorridorByEdgeId(topEdgeId, false);
+    }
   }
 
   function renderRoiQueue(recommendations) {
@@ -350,9 +491,11 @@
 
     listEl.innerHTML = recommendations
       .map(function (rec) {
+        const edgeId = rec.edge_id || `${rec.edge_u}-${rec.edge_v}-${rec.edge_key}`;
         const cleared = isEdgeCleared(rec.edge_u, rec.edge_v, rec.edge_key);
+        const isSelected = state.activeEdgeId === String(edgeId);
         return `
-          <div class="roi-card ${cleared ? "cleared" : ""}">
+          <div class="roi-card ${cleared ? "cleared" : ""} ${isSelected ? "selected-corridor" : ""}" data-edge-id="${edgeId}">
             <div class="roi-card-header">
               <span class="roi-rank-badge">RANK #${rec.rank}</span>
               <span class="roi-score">ROI: ${rec.clearance_roi.toFixed(3)} bldg/m²</span>
@@ -372,17 +515,14 @@
                 data-v="${rec.edge_v}"
                 data-key="${rec.edge_key}"
               >
-                ${cleared ? "✓ Clearance Simulated (Tap to Undo)" : "Simulate Clearance"}
+                ${cleared ? "✓ Clearance Simulated (Undo)" : "Simulate Clearance"}
               </button>
               <button
                 type="button"
                 class="action-btn btn-inspect-roi"
-                data-name="${rec.road_name}"
-                data-width="${rec.current_clear_width_m}"
-                data-debris="${rec.debris_area_sqm}"
-                data-gsd="${rec.gsd_m_per_px}"
+                data-edge-id="${edgeId}"
               >
-                VLM Triage
+                5m Caliper &amp; VLM
               </button>
             </div>
           </div>
@@ -390,8 +530,19 @@
       })
       .join("");
 
+    listEl.querySelectorAll(".roi-card").forEach(function (card) {
+      card.addEventListener("click", function (ev) {
+        if (ev.target && ev.target.classList.contains("btn-sim-clear")) {
+          return;
+        }
+        const edgeId = card.getAttribute("data-edge-id");
+        inspectCorridorByEdgeId(edgeId, true);
+      });
+    });
+
     listEl.querySelectorAll(".btn-sim-clear").forEach(function (btn) {
-      btn.addEventListener("click", function () {
+      btn.addEventListener("click", function (ev) {
+        ev.stopPropagation();
         const u = btn.getAttribute("data-u");
         const v = btn.getAttribute("data-v");
         const key = Number(btn.getAttribute("data-key") || 0);
@@ -400,16 +551,10 @@
     });
 
     listEl.querySelectorAll(".btn-inspect-roi").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        switchTab("assess");
-        runVlmAssessmentForSegment({
-          name: btn.getAttribute("data-name"),
-          min_clear_width_m: Number(btn.getAttribute("data-width")),
-          debris_area_sqm: Number(btn.getAttribute("data-debris")),
-          gsd_m_per_px: Number(btn.getAttribute("data-gsd")),
-          water_overlap_ratio: 0.0,
-          has_water_obstruction: false,
-        });
+      btn.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        const edgeId = btn.getAttribute("data-edge-id");
+        inspectCorridorByEdgeId(edgeId, true);
       });
     });
   }
@@ -428,10 +573,14 @@
     const data = await res.json();
     state.clearedEdges = data.cleared_edges || [];
     state.roadsGeojson = data.roads || state.roadsGeojson;
+    state.lastRoiRecommendations = data.recommendations || [];
     updateClearedCounter();
     renderRoadsLayer();
-    renderRoiQueue(data.recommendations || []);
+    renderRoiQueue(state.lastRoiRecommendations);
     await refreshRoute();
+    if (state.activeEdgeId) {
+      await inspectCorridorByEdgeId(state.activeEdgeId, false);
+    }
   }
 
   async function resetSimulatedClearances() {
@@ -446,30 +595,28 @@
     const data = await res.json();
     state.clearedEdges = data.cleared_edges || [];
     state.roadsGeojson = data.roads || state.roadsGeojson;
+    state.lastRoiRecommendations = data.recommendations || [];
     updateClearedCounter();
     renderRoadsLayer();
-    renderRoiQueue(data.recommendations || []);
+    renderRoiQueue(state.lastRoiRecommendations);
     await refreshRoute();
+    if (state.activeEdgeId) {
+      await inspectCorridorByEdgeId(state.activeEdgeId, false);
+    }
   }
 
   function updateClearedCounter() {
     document.getElementById("cleared-count").textContent = String(state.clearedEdges.length);
   }
 
-  async function runVlmAssessmentForSegment(seg) {
+  async function runVlmAssessmentForEdge(edgeId) {
     const modeSelect = document.getElementById("select-failover-mode");
     const boxEl = document.getElementById("assess-result-box");
     boxEl.innerHTML = "Running 3-Tier VLM Damage Grading &amp; Circuit Breaker...";
 
     const payload = {
-      target_id: seg.name || "hwy98-segment",
-      road_name: seg.name || "US Highway 98",
-      min_clear_width_m: Number(seg.min_clear_width_m ?? 2.65),
-      debris_area_m2: Number(seg.debris_area_sqm ?? 24.0),
-      water_area_m2: Number(seg.water_overlap_ratio || 0) * 80.0,
-      has_water_obstruction: Boolean(seg.has_water_obstruction || Number(seg.water_overlap_ratio) > 0),
-      building_debris_overlap_ratio: Number(seg.debris_area_sqm || 0) > 20 ? 0.38 : 0.12,
-      gsd_m_per_px: Number(seg.gsd_m_per_px || 0.2804),
+      edge_id: String(edgeId),
+      force_offline: Boolean(state.forceOffline),
       mode: modeSelect ? modeSelect.value : "auto",
     };
 
@@ -480,24 +627,126 @@
     });
     const data = await res.json();
 
+    const formattedTier = formatTierLabel(data.tier_used);
     const tierBadge = document.getElementById("vlm-tier-badge");
-    if (data.tier_used && data.tier_used.includes("tier_1")) {
-      tierBadge.textContent = "TIER 1: CLOUD META API";
-    } else if (data.tier_used && data.tier_used.includes("tier_2")) {
-      tierBadge.textContent = "TIER 2: EDGE MLX-VLM (4-BIT)";
-    } else {
-      tierBadge.textContent = "TIER 3: DETERMINISTIC GEOM";
-    }
+    tierBadge.textContent = formattedTier.toUpperCase();
+
+    // Update Corridor AI Inspector dock
+    document.getElementById("inspector-tier-pill").textContent = formattedTier;
+    document.getElementById("inspector-road-name").textContent = data.target_id || String(edgeId);
+    document.getElementById("inspector-latency-row").innerHTML =
+      `Latency: <strong>${data.latency_ms} ms</strong> &bull; ` +
+      `Memory Cleared: <strong>${data.memory_cleared}</strong>`;
+    document.getElementById("inspector-severity-row").innerHTML =
+      `Building: <code>${data.building_damage_severity}</code> &bull; ` +
+      `Road: <code>${data.road_damage_severity}</code>`;
+    document.getElementById("inspector-rationale-text").textContent =
+      data.passability_rationale || "";
 
     boxEl.innerHTML = `
-      <div><strong>Target:</strong> ${data.target_id}</div>
-      <div><strong>Active Tier Used:</strong> <code>${data.tier_used}</code> (${data.latency_ms} ms)</div>
+      <div><strong>Edge ID:</strong> <code>${data.edge_id || data.target_id}</code></div>
+      <div><strong>Comms Blackout Mode:</strong> <code>force_offline=${data.force_offline}</code></div>
+      <div><strong>Active Tier Used:</strong> <code>${formattedTier}</code> (${data.latency_ms} ms)</div>
       <div><strong>Fallback Chain:</strong> <code>${(data.fallback_chain || []).join(" &rarr; ")}</code></div>
       <div><strong>Building Severity:</strong> <code>${data.building_damage_severity}</code> (High-Sev: ${data.is_high_severity ? "YES" : "NO"})</div>
       <div><strong>Road Severity:</strong> <code>${data.road_damage_severity}</code></div>
       <div><strong>Unified Memory Hygiene:</strong> <code>memory_cleared=${data.memory_cleared}</code></div>
       <div class="roi-explanation">${data.passability_rationale}</div>
     `;
+  }
+
+  /**
+   * Export the currently computed route, turn-by-turn clearance steps, and top ROI
+   * choke points as a local `.geojson` file for offline responder handoff.
+   */
+  function exportFieldManifestGeojson() {
+    const features = [];
+
+    if (state.lastRouteData && state.lastRouteData.geojson_geometry) {
+      features.push({
+        type: "Feature",
+        geometry: state.lastRouteData.geojson_geometry,
+        properties: {
+          manifest_type: "primary_vehicle_route",
+          vehicle_class: state.vehicleClass,
+          reachable: state.lastRouteData.reachable,
+          total_distance_m: state.lastRouteData.total_distance_m,
+          estimated_transit_time_s: state.lastRouteData.estimated_transit_time_s,
+          rationale: state.lastRouteData.rationale,
+        },
+      });
+
+      (state.lastRouteData.edge_steps || []).forEach(function (step, idx) {
+        if (step.coordinates_lonlat && step.coordinates_lonlat.length >= 2) {
+          features.push({
+            type: "Feature",
+            geometry: {
+              type: "LineString",
+              coordinates: step.coordinates_lonlat,
+            },
+            properties: {
+              manifest_type: "turn_by_turn_step",
+              step_number: idx + 1,
+              name: step.name,
+              length_m: step.length_m,
+              min_clear_width_m: step.min_clear_width_m,
+              debris_area_sqm: step.debris_area_sqm,
+              travel_time_s: step.travel_time_s,
+              instruction: step.instruction,
+            },
+          });
+        }
+      });
+    }
+
+    (state.lastRoiRecommendations || []).forEach(function (rec) {
+      features.push({
+        type: "Feature",
+        geometry: {
+          type: "Point",
+          coordinates: rec.bottleneck_lonlat || [-85.4125, 29.9415],
+        },
+        properties: {
+          manifest_type: "choke_point_clearance_roi",
+          rank: rec.rank,
+          edge_id: rec.edge_id,
+          road_name: rec.road_name,
+          current_clear_width_m: rec.current_clear_width_m,
+          restored_clear_width_m: rec.restored_clear_width_m,
+          debris_area_sqm: rec.debris_area_sqm,
+          high_severity_structures_unlocked: rec.high_severity_structures_unlocked,
+          clearance_roi: rec.clearance_roi,
+          explanation: rec.explanation,
+        },
+      });
+    });
+
+    const manifestGeojson = {
+      type: "FeatureCollection",
+      metadata: {
+        system: "FirstLight Tactical Disaster Routing Engine",
+        aoi: "Mexico Beach, FL (Hurricane Michael - US Hwy 98 Corridor)",
+        vehicle_class: state.vehicleClass,
+        force_offline_mode: state.forceOffline,
+        crs: "EPSG:4326",
+        metric_crs: "EPSG:32616",
+        gsd_m_per_px: 0.2804,
+        exported_at: new Date().toISOString(),
+      },
+      features: features,
+    };
+
+    const blob = new Blob([JSON.stringify(manifestGeojson, null, 2)], {
+      type: "application/geo+json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `firstlight_field_manifest_${state.vehicleClass}.geojson`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   function switchTab(tabId) {
@@ -520,6 +769,42 @@
         renderRoadsLayer();
         await Promise.all([refreshRoute(), refreshClearanceRoi()]);
       });
+    });
+
+    const blackoutToggle = document.getElementById("toggle-comms-blackout");
+    blackoutToggle.addEventListener("change", async function (ev) {
+      state.forceOffline = Boolean(ev.target.checked);
+      const labelParent = blackoutToggle.closest(".blackout-switch");
+      if (labelParent) {
+        labelParent.classList.toggle("active-blackout", state.forceOffline);
+      }
+      const dot = document.getElementById("network-status-dot");
+      const netText = document.getElementById("network-status-text");
+      if (state.forceOffline) {
+        dot.classList.remove("online");
+        dot.classList.add("offline");
+        netText.textContent = "COMMS BLACKOUT (EDGE ONLY)";
+      } else {
+        dot.classList.remove("offline");
+        dot.classList.add("online");
+        netText.textContent = "LOCAL WI-FI / OFFLINE READY";
+      }
+      if (state.activeEdgeId) {
+        await runVlmAssessmentForEdge(state.activeEdgeId);
+      }
+    });
+
+    document.getElementById("toggle-caliper-rays").addEventListener("change", function (ev) {
+      state.showCaliperRays = Boolean(ev.target.checked);
+      if (state.showCaliperRays && state.lastCaliperGeojson) {
+        renderCaliperLayer(state.lastCaliperGeojson, false);
+      } else {
+        state.caliperLayer.clearLayers();
+      }
+    });
+
+    document.getElementById("btn-export-manifest").addEventListener("click", function () {
+      exportFieldManifestGeojson();
     });
 
     document.querySelectorAll(".panel-tab").forEach(function (btn) {
@@ -554,15 +839,8 @@
     });
 
     document.getElementById("btn-run-assess").addEventListener("click", function () {
-      runVlmAssessmentForSegment(
-        state.selectedSegment || {
-          name: "US Highway 98 E Bottleneck",
-          min_clear_width_m: 2.65,
-          debris_area_sqm: 28.4,
-          gsd_m_per_px: 0.2804,
-          water_overlap_ratio: 0.0,
-        }
-      );
+      const targetEdge = state.activeEdgeId || "0";
+      runVlmAssessmentForEdge(targetEdge);
     });
   }
 

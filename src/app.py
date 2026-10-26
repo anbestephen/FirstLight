@@ -14,16 +14,19 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 import geopandas as gpd
 import networkx as nx
 import numpy as np
+import osmnx as ox
 from PIL import Image
+from pyproj import Transformer
 from pydantic import BaseModel, Field
 import rasterio
 from rasterio.enums import Resampling
-from shapely.geometry import LineString, mapping
+from shapely.geometry import LineString, MultiLineString, MultiPolygon, mapping
+from shapely.ops import transform as shapely_transform
 
 from src.failover import (
     ConnectivityTier,
@@ -35,11 +38,14 @@ from src.failover import (
 from src.geometry import (
     TARGET_METRIC_CRS,
     WGS84_CRS,
+    build_edge_caliper_geojson,
     compute_raster_gsd_and_crs,
+    extract_corridor_aerial_crop_png,
+    generate_simulated_disaster_masks_utm,
+    load_and_align_roads,
 )
 from src.routing import (
     VEHICLE_MIN_WIDTH_M,
-    VehicleClass,
     assign_buildings_to_graph_nodes,
     compute_multi_class_routes,
     compute_shortest_route,
@@ -90,6 +96,8 @@ class RouteRequest(BaseModel):
 class AssessRequest(BaseModel):
     """Request payload for `POST /api/assess`."""
 
+    edge_id: str | int | None = None
+    force_offline: bool = False
     target_id: str = "hwy98-bottleneck"
     road_name: str = "US Highway 98"
     min_clear_width_m: float = 2.65
@@ -113,20 +121,20 @@ class SimulateClearRequest(BaseModel):
 
 
 class FirstLightState:
-    """In-memory state manager holding the annotated road graph, layers, and failover router."""
+    """In-memory state manager holding the annotated road graph, masks, layers, and failover router."""
 
     def __init__(self) -> None:
         self.base_graph: nx.MultiDiGraph | None = None
         self.active_graph: nx.MultiDiGraph | None = None
         self.cleared_edges: list[tuple[int | str, int | str, int]] = []
         self.raster_meta: dict[str, Any] | None = None
+        self.sim_masks_utm: dict[str, MultiPolygon] | None = None
         self.buildings_features: list[dict[str, Any]] | None = None
         self.raster_preview_png: bytes | None = None
-        # Default to Tier 3 deterministic in interactive web requests unless user selects AUTO/MLX/CLOUD,
-        # while keeping VLMFailoverRouter ready for all 3 tiers.
         self.router = VLMFailoverRouter(
             local_mlx_model_path=MODELS_DIR / "Llama-3.2-11B-Vision-Instruct-4bit",
             mode=FailoverMode.AUTO,
+            fast_edge_inference=True,
         )
 
     def ensure_loaded(self) -> None:
@@ -156,6 +164,16 @@ class FirstLightState:
             simulate_if_no_masks=True,
         )
         G = assign_buildings_to_graph_nodes(G, buildings_source=BUILDINGS_GEOJSON_PATH)
+
+        # Cache the simulated UTM SAM 3.1 disaster masks for caliper inspection
+        _, edges_gdf = ox.graph_to_gdfs(G)
+        roads_utm = load_and_align_roads(
+            edges_gdf.reset_index(),
+            raster_path=RASTER_TIF_PATH if RASTER_TIF_PATH.exists() else None,
+            target_crs=TARGET_METRIC_CRS,
+        )
+        self.sim_masks_utm = generate_simulated_disaster_masks_utm(roads_utm)
+
         self.base_graph = G
         self.active_graph = G.copy()
 
@@ -186,6 +204,110 @@ class FirstLightState:
         if as_str in graph.nodes:
             return as_str
         return raw_node
+
+    def resolve_edge_by_id(
+        self, edge_id: str | int
+    ) -> tuple[int | str, int | str, int, dict[str, Any]]:
+        """
+        Resolve `edge_id` (supporting `'u-v-k'`, `'u-v'`, `'u_v_k'`, or integer index `0..N-1`)
+        to `(u, v, key, edge_data)` in `self.active_graph`.
+        """
+        self.ensure_loaded()
+        assert self.active_graph is not None
+        G = self.active_graph
+        raw_str = str(edge_id).strip()
+
+        # 1. Try composite u-v-k or u-v
+        for sep in ("-", "_", ":"):
+            if sep in raw_str:
+                parts = raw_str.split(sep)
+                if len(parts) >= 2:
+                    u_cand = self._resolve_node_id(G, parts[0])
+                    v_cand = self._resolve_node_id(G, parts[1])
+                    k_cand = int(parts[2]) if len(parts) >= 3 and parts[2].isdigit() else 0
+                    if G.has_edge(u_cand, v_cand, k_cand):
+                        return u_cand, v_cand, k_cand, G[u_cand][v_cand][k_cand]
+                    if G.has_edge(u_cand, v_cand):
+                        first_k = next(iter(G[u_cand][v_cand].keys()))
+                        return u_cand, v_cand, int(first_k), G[u_cand][v_cand][first_k]
+
+        # 2. Try integer edge index
+        edges_list = list(G.edges(keys=True, data=True))
+        try:
+            idx = int(raw_str)
+            if 0 <= idx < len(edges_list):
+                u, v, k, d = edges_list[idx]
+                return u, v, int(k), d
+        except ValueError:
+            pass
+
+        # 3. Fallback: match by road name substring or return first bottleneck edge
+        for u, v, k, d in edges_list:
+            name_val = str(d.get("name", ""))
+            if raw_str.lower() in name_val.lower():
+                return u, v, int(k), d
+
+        raise HTTPException(
+            status_code=404,
+            detail=f"Road edge '{edge_id}' not found in Mexico Beach graph.",
+        )
+
+    def get_edge_midpoint_lonlat(
+        self, u: int | str, v: int | str, edge_data: dict[str, Any]
+    ) -> tuple[float, float]:
+        """Return `(lon, lat)` in WGS84 for the bottleneck or midpoint of edge `(u, v)`."""
+        self.ensure_loaded()
+        assert self.active_graph is not None
+        G = self.active_graph
+
+        bottleneck = edge_data.get("bottleneck_lonlat")
+        if (
+            isinstance(bottleneck, (list, tuple))
+            and len(bottleneck) == 2
+            and bottleneck[0] is not None
+        ):
+            return float(bottleneck[0]), float(bottleneck[1])
+
+        geom = edge_data.get("geometry")
+        if isinstance(geom, LineString) and not geom.is_empty:
+            pt = geom.interpolate(0.5, normalized=True)
+            return float(pt.x), float(pt.y)
+
+        ux = float(G.nodes[u].get("x", -85.4125))
+        uy = float(G.nodes[u].get("y", 29.9415))
+        vx = float(G.nodes[v].get("x", -85.4125))
+        vy = float(G.nodes[v].get("y", 29.9415))
+        return (ux + vx) * 0.5, (uy + vy) * 0.5
+
+    def get_edge_centerline_utm(
+        self, u: int | str, v: int | str, edge_data: dict[str, Any]
+    ) -> LineString:
+        """Return the edge centerline `LineString` projected in `EPSG:32616` (UTM 16N meters)."""
+        self.ensure_loaded()
+        assert self.active_graph is not None
+        G = self.active_graph
+
+        geom = edge_data.get("geometry")
+        if isinstance(geom, MultiLineString):
+            line_wgs84 = max(geom.geoms, key=lambda g: g.length)
+        elif isinstance(geom, LineString) and not geom.is_empty:
+            line_wgs84 = geom
+        else:
+            ux = float(G.nodes[u].get("x", -85.4125))
+            uy = float(G.nodes[u].get("y", 29.9415))
+            vx = float(G.nodes[v].get("x", -85.4120))
+            vy = float(G.nodes[v].get("y", 29.9415))
+            line_wgs84 = LineString([(ux, uy), (vx, vy)])
+
+        to_utm = Transformer.from_crs(WGS84_CRS, TARGET_METRIC_CRS, always_xy=True)
+        return shapely_transform(to_utm.transform, line_wgs84)
+
+    def is_edge_currently_cleared(
+        self, u: int | str, v: int | str, key: int = 0
+    ) -> bool:
+        pair = (u, v, int(key))
+        rev_pair = (v, u, int(key))
+        return pair in self.cleared_edges or rev_pair in self.cleared_edges
 
     def toggle_clear_edge(
         self, edge_u: int | str, edge_v: int | str, edge_key: int = 0
@@ -259,7 +381,7 @@ class FirstLightState:
         assert G is not None
 
         features: list[dict[str, Any]] = []
-        for u, v, k, data in G.edges(keys=True, data=True):
+        for idx, (u, v, k, data) in enumerate(G.edges(keys=True, data=True)):
             geom = data.get("geometry")
             if isinstance(geom, LineString) and not geom.is_empty:
                 geom_dict = mapping(geom)
@@ -283,11 +405,14 @@ class FirstLightState:
             else:
                 name_str = f"Segment {u}-{v}"
 
+            edge_id_str = f"{u}-{v}-{int(k)}"
             features.append(
                 {
                     "type": "Feature",
                     "geometry": geom_dict,
                     "properties": {
+                        "edge_id": edge_id_str,
+                        "edge_index": idx,
                         "u": u,
                         "v": v,
                         "key": int(k),
@@ -354,7 +479,7 @@ app = FastAPI(
         "Offline-resilient SAM 3.1 geometric road width measurement, 3-tier VLM failover, "
         "multi-class emergency routing, and Choke-Point Clearance ROI engine."
     ),
-    version="0.1.0",
+    version="0.2.0",
 )
 
 app.add_middleware(
@@ -380,7 +505,6 @@ def _parse_endpoint_spec(
         if len(spec) < 2:
             raise ValueError("Coordinate list must contain [lon, lat].")
         first, second = float(spec[0]), float(spec[1])
-        # Support both [lon, lat] and [lat, lon] automatically for Mexico Beach (~ -85.4W, 29.9N)
         if first > 0 and second < 0:
             lon, lat = second, first
         else:
@@ -445,10 +569,12 @@ def get_health() -> dict[str, Any]:
 
     active_tier = (
         ConnectivityTier.TIER_1_CLOUD.value
-        if cloud_key_configured and state.router.mode in (FailoverMode.AUTO, FailoverMode.FORCE_CLOUD)
+        if cloud_key_configured
+        and state.router.mode in (FailoverMode.AUTO, FailoverMode.FORCE_CLOUD)
         else (
             ConnectivityTier.TIER_2_MLX.value
-            if mlx_weights_ready and state.router.mode in (FailoverMode.AUTO, FailoverMode.FORCE_MLX)
+            if mlx_weights_ready
+            and state.router.mode in (FailoverMode.AUTO, FailoverMode.FORCE_MLX)
             else ConnectivityTier.TIER_3_DETERMINISTIC.value
         )
     )
@@ -557,41 +683,149 @@ def get_raster_preview() -> Response:
     return Response(content=png_bytes, media_type="image/png")
 
 
+@app.get("/api/choke-point/{edge_id}/caliper")
+def get_choke_point_caliper(edge_id: str) -> dict[str, Any]:
+    """
+    Return a GeoJSON FeatureCollection in EPSG:4326 for `edge_id` containing:
+      - SAM 3.1 debris and water obstacle polygons intersecting or adjacent to the corridor.
+      - The 5.0m orthogonal cross-section rays cast along the road centerline, annotated
+        with `station_m`, `clear_width_m`, `is_pinch_point`, and vehicle passability flags.
+    """
+    state.ensure_loaded()
+    assert state.sim_masks_utm is not None
+    assert state.raster_meta is not None
+
+    u, v, k, edata = state.resolve_edge_by_id(edge_id)
+    centerline_utm = state.get_edge_centerline_utm(u, v, edata)
+
+    is_cleared = state.is_edge_currently_cleared(u, v, k)
+    debris_mask_utm = None if is_cleared else state.sim_masks_utm.get("debris")
+    water_mask_utm = state.sim_masks_utm.get("water")
+
+    raw_name = edata.get("name")
+    if isinstance(raw_name, list):
+        road_name = ", ".join(str(x) for x in raw_name if x)
+    elif raw_name is not None and not (
+        isinstance(raw_name, float) and math.isnan(raw_name)
+    ):
+        road_name = str(raw_name)
+    else:
+        road_name = f"Segment {u}-{v}"
+
+    gsd_m_per_px = float(edata.get("gsd_m_per_px", state.raster_meta["gsd_m_per_px"]))
+    canonical_edge_id = f"{u}-{v}-{k}"
+
+    return build_edge_caliper_geojson(
+        centerline_utm=centerline_utm,
+        debris_mask_utm=debris_mask_utm,
+        water_mask_utm=water_mask_utm,
+        road_surface_mask_utm=None,
+        edge_id=canonical_edge_id,
+        u=u,
+        v=v,
+        name=road_name,
+        gsd_m_per_px=gsd_m_per_px,
+    )
+
+
+@app.get("/api/choke-point/{edge_id}/crop.png")
+def get_choke_point_crop_png(edge_id: str) -> Response:
+    """
+    Extract a real 256x256 pixel RGB PNG aerial patch centered on the road edge's
+    midpoint directly from `data/noaa_michael_mexico_beach.tif` using Rasterio window reading.
+    """
+    state.ensure_loaded()
+    u, v, _, edata = state.resolve_edge_by_id(edge_id)
+    lon, lat = state.get_edge_midpoint_lonlat(u, v, edata)
+    png_bytes = extract_corridor_aerial_crop_png(
+        RASTER_TIF_PATH, lon=lon, lat=lat, size_px=256
+    )
+    return Response(content=png_bytes, media_type="image/png")
+
+
 @app.post("/api/assess")
 async def post_assess(req: AssessRequest) -> dict[str, Any]:
     """
     Run building and road damage grading through `VLMFailoverRouter` with active tier
-    metadata and Apple Silicon unified memory release metrics.
+    metadata, `force_offline` Comms Blackout support, real NOAA GeoTIFF aerial crop
+    extraction, and Apple Silicon unified memory release metrics.
     """
     state.ensure_loaded()
-    telemetry = GeometricTelemetry(
-        target_id=req.target_id,
-        road_name=req.road_name,
-        min_clear_width_m=req.min_clear_width_m,
-        debris_area_m2=req.debris_area_m2,
-        water_area_m2=req.water_area_m2,
-        has_water_obstruction=req.has_water_obstruction,
-        building_debris_overlap_ratio=req.building_debris_overlap_ratio,
-        building_water_overlap_ratio=req.building_water_overlap_ratio,
-        gsd_m_per_px=req.gsd_m_per_px,
-    )
+    crop_bytes: bytes | None = None
+    resolved_edge_id: str | None = None
+
+    if req.edge_id is not None:
+        u, v, k, edata = state.resolve_edge_by_id(req.edge_id)
+        resolved_edge_id = f"{u}-{v}-{k}"
+        lon, lat = state.get_edge_midpoint_lonlat(u, v, edata)
+        crop_bytes = extract_corridor_aerial_crop_png(
+            RASTER_TIF_PATH, lon=lon, lat=lat, size_px=256
+        )
+
+        raw_name = edata.get("name")
+        if isinstance(raw_name, list):
+            road_name = ", ".join(str(x) for x in raw_name if x)
+        elif raw_name is not None and not (
+            isinstance(raw_name, float) and math.isnan(raw_name)
+        ):
+            road_name = str(raw_name)
+        else:
+            road_name = f"Segment {u}-{v}"
+
+        debris_sqm = float(edata.get("debris_area_sqm", 0.0))
+        water_ratio = float(edata.get("water_overlap_ratio", 0.0))
+        length_m = float(edata.get("length_m", 50.0))
+        nominal_w = float(edata.get("nominal_width_m", 8.0))
+        water_area = float(edata.get("water_area_m2", water_ratio * length_m * nominal_w))
+
+        telemetry = GeometricTelemetry(
+            target_id=resolved_edge_id,
+            road_name=road_name,
+            min_clear_width_m=float(edata.get("min_clear_width_m", 8.0)),
+            debris_area_m2=debris_sqm,
+            water_area_m2=water_area,
+            has_water_obstruction=bool(
+                edata.get("has_water_obstruction", False) or water_ratio > 0.0
+            ),
+            building_debris_overlap_ratio=0.38 if debris_sqm >= 18.0 else (0.14 if debris_sqm > 0 else 0.0),
+            building_water_overlap_ratio=water_ratio,
+            gsd_m_per_px=float(edata.get("gsd_m_per_px", 0.2804)),
+        )
+    else:
+        telemetry = GeometricTelemetry(
+            target_id=req.target_id,
+            road_name=req.road_name,
+            min_clear_width_m=req.min_clear_width_m,
+            debris_area_m2=req.debris_area_m2,
+            water_area_m2=req.water_area_m2,
+            has_water_obstruction=req.has_water_obstruction,
+            building_debris_overlap_ratio=req.building_debris_overlap_ratio,
+            building_water_overlap_ratio=req.building_water_overlap_ratio,
+            gsd_m_per_px=req.gsd_m_per_px,
+        )
 
     prev_mode = state.router.mode
     if req.mode is not None:
         state.router.mode = req.mode
-    elif not state.router.api_key and state.router._custom_mlx_runner is None:
-        # In fast interactive dashboard queries without a cloud API key, avoid blocking
-        # HTTP requests for full 11B model cold-boot unless FORCE_MLX is explicitly requested
-        state.router.mode = FailoverMode.FORCE_DETERMINISTIC
+    else:
+        state.router.mode = FailoverMode.AUTO
 
     try:
-        assessment = await state.router.assess_damage_async(telemetry)
+        assessment = await state.router.assess_damage_async(
+            telemetry,
+            image_source=crop_bytes,
+            force_offline=req.force_offline,
+        )
     finally:
-        if req.mode is None:
-            state.router.mode = prev_mode
+        state.router.mode = prev_mode
 
     mem_stats = release_unified_memory()
     payload = assessment.model_dump()
+    payload["edge_id"] = resolved_edge_id or str(req.edge_id or req.target_id)
+    payload["force_offline"] = req.force_offline
+    payload["crop_url"] = (
+        f"/api/choke-point/{resolved_edge_id}/crop.png" if resolved_edge_id else None
+    )
     payload["memory_cleared"] = True
     payload["unified_memory_stats"] = mem_stats
     return payload

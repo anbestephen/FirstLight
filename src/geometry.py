@@ -32,6 +32,7 @@ import rasterio
 from rasterio.features import shapes as raster_shapes
 from rasterio.transform import Affine
 from rasterio.warp import calculate_default_transform
+from rasterio.windows import Window
 from shapely.geometry import (
     GeometryCollection,
     LineString,
@@ -40,6 +41,7 @@ from shapely.geometry import (
     Point,
     Polygon,
     box,
+    mapping,
     shape,
 )
 from shapely.ops import transform as shapely_transform, unary_union
@@ -938,3 +940,253 @@ class SAM31GeometricInstrument:
         gc.collect()
         if torch.backends.mps.is_available():
             torch.mps.empty_cache()
+
+
+def build_edge_caliper_geojson(
+    centerline_utm: LineString,
+    debris_mask_utm: Polygon | MultiPolygon | None = None,
+    water_mask_utm: Polygon | MultiPolygon | None = None,
+    road_surface_mask_utm: Polygon | MultiPolygon | None = None,
+    *,
+    edge_id: str | int = 0,
+    u: int | str | None = None,
+    v: int | str | None = None,
+    name: str = "Unnamed Road",
+    gsd_m_per_px: float = 0.2804,
+    sampling_interval_m: float = DEFAULT_SAMPLING_INTERVAL_M,
+    ray_half_width_m: float = DEFAULT_RAY_HALF_WIDTH_M,
+    nominal_road_half_width_m: float = DEFAULT_NOMINAL_ROAD_HALF_WIDTH_M,
+    utm_crs: str = TARGET_METRIC_CRS,
+) -> dict[str, Any]:
+    """
+    Build a GeoJSON FeatureCollection in EPSG:4326 (`WGS84`) for a road edge containing:
+      1. SAM 3.1 debris and water obstacle polygons intersecting or adjacent to the corridor.
+      2. The 5.0m orthogonal cross-section caliper rays cast along the road centerline,
+         annotated with `station_m`, `clear_width_m`, `is_pinch_point`, and vehicle
+         passability flags (`atv`, `ambulance`, `fire_engine`).
+    """
+    clearance = measure_road_edge_clearance(
+        centerline_utm=centerline_utm,
+        debris_mask_utm=debris_mask_utm,
+        water_mask_utm=water_mask_utm,
+        road_surface_mask_utm=road_surface_mask_utm,
+        edge_id=edge_id,
+        u=int(u) if isinstance(u, int) else None,
+        v=int(v) if isinstance(v, int) else None,
+        name=name,
+        gsd_m_per_px=gsd_m_per_px,
+        sampling_interval_m=sampling_interval_m,
+        ray_half_width_m=ray_half_width_m,
+        nominal_road_half_width_m=nominal_road_half_width_m,
+        utm_crs=utm_crs,
+    )
+
+    to_wgs84 = Transformer.from_crs(utm_crs, WGS84_CRS, always_xy=True)
+    corridor_search_utm = centerline_utm.buffer(
+        ray_half_width_m + 4.0, cap_style="round", join_style="round"
+    )
+    road_corridor_utm = (
+        _normalize_to_multipolygon(road_surface_mask_utm)
+        if (road_surface_mask_utm is not None and not road_surface_mask_utm.is_empty)
+        else _normalize_to_multipolygon(
+            centerline_utm.buffer(nominal_road_half_width_m, cap_style="round", join_style="round")
+        )
+    )
+
+    debris_mp = _normalize_to_multipolygon(debris_mask_utm)
+    water_mp = _normalize_to_multipolygon(water_mask_utm)
+
+    local_debris_utm = (
+        debris_mp.intersection(corridor_search_utm)
+        if not debris_mp.is_empty
+        else MultiPolygon()
+    )
+    local_water_utm = (
+        water_mp.intersection(corridor_search_utm)
+        if not water_mp.is_empty
+        else MultiPolygon()
+    )
+
+    features: list[dict[str, Any]] = []
+
+    # 1. Road Corridor Polygon Feature
+    if not road_corridor_utm.is_empty:
+        corridor_wgs84 = shapely_transform(to_wgs84.transform, road_corridor_utm)
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": mapping(corridor_wgs84),
+                "properties": {
+                    "feature_type": "road_corridor",
+                    "edge_id": str(edge_id),
+                    "road_name": name,
+                    "nominal_width_m": round(nominal_road_half_width_m * 2.0, 2),
+                    "gsd_m_per_px": round(gsd_m_per_px, 4),
+                },
+            }
+        )
+
+    # 2. SAM 3.1 Debris Obstacle Polygons
+    local_debris_mp = _normalize_to_multipolygon(local_debris_utm)
+    for idx, poly in enumerate(local_debris_mp.geoms):
+        poly_wgs84 = shapely_transform(to_wgs84.transform, poly)
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": mapping(poly_wgs84),
+                "properties": {
+                    "feature_type": "debris_mask",
+                    "obstacle_id": f"debris-{edge_id}-{idx}",
+                    "edge_id": str(edge_id),
+                    "area_m2": round(float(poly.area), 3),
+                    "gsd_m_per_px": round(gsd_m_per_px, 4),
+                },
+            }
+        )
+
+    # 3. SAM 3.1 Water Obstacle Polygons
+    local_water_mp = _normalize_to_multipolygon(local_water_utm)
+    for idx, poly in enumerate(local_water_mp.geoms):
+        poly_wgs84 = shapely_transform(to_wgs84.transform, poly)
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": mapping(poly_wgs84),
+                "properties": {
+                    "feature_type": "water_mask",
+                    "obstacle_id": f"water-{edge_id}-{idx}",
+                    "edge_id": str(edge_id),
+                    "area_m2": round(float(poly.area), 3),
+                    "gsd_m_per_px": round(gsd_m_per_px, 4),
+                },
+            }
+        )
+
+    # 4. Orthogonal 5.0m Cross-Section Caliper Rays
+    pinch_idx = -1
+    if clearance.cross_sections:
+        pinch_idx = min(
+            range(len(clearance.cross_sections)),
+            key=lambda i: clearance.cross_sections[i].clear_width_m,
+        )
+
+    for idx, cs in enumerate(clearance.cross_sections):
+        is_pinch = idx == pinch_idx
+        cs_flags = compute_passability_flags(
+            min_clear_width_m=cs.clear_width_m,
+            has_water_obstruction=cs.water_intersected,
+        )
+        # Use clear_segment_utm if non-degenerate (>0.05m), else full ray_line_utm so ray is visible
+        active_line_utm = (
+            cs.clear_segment_utm
+            if cs.clear_segment_utm.length > 0.05
+            else cs.ray_line_utm
+        )
+        ray_wgs84 = shapely_transform(to_wgs84.transform, active_line_utm)
+        full_ray_wgs84 = shapely_transform(to_wgs84.transform, cs.ray_line_utm)
+
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": mapping(ray_wgs84),
+                "properties": {
+                    "feature_type": "caliper_ray",
+                    "edge_id": str(edge_id),
+                    "ray_index": idx,
+                    "station_m": round(cs.station_m, 3),
+                    "clear_width_m": round(cs.clear_width_m, 3),
+                    "is_pinch_point": is_pinch,
+                    "water_intersected": cs.water_intersected,
+                    "debris_intersected": cs.debris_intersected,
+                    "passability": cs_flags.to_dict(),
+                    "atv": cs_flags.atv,
+                    "ambulance": cs_flags.ambulance,
+                    "fire_engine": cs_flags.fire_engine,
+                    "full_ray_coords_wgs84": list(full_ray_wgs84.coords),
+                    "gsd_m_per_px": round(gsd_m_per_px, 4),
+                },
+            }
+        )
+
+    pinch_station_m = (
+        round(clearance.cross_sections[pinch_idx].station_m, 3)
+        if pinch_idx >= 0
+        else 0.0
+    )
+
+    return {
+        "type": "FeatureCollection",
+        "properties": {
+            "edge_id": str(edge_id),
+            "u": u,
+            "v": v,
+            "road_name": name,
+            "crs": WGS84_CRS,
+            "metric_crs": utm_crs,
+            "gsd_m_per_px": round(gsd_m_per_px, 4),
+            "length_m": round(clearance.length_m, 3),
+            "min_clear_width_m": round(clearance.min_clear_width_m, 3),
+            "mean_clear_width_m": round(clearance.mean_clear_width_m, 3),
+            "max_clear_width_m": round(clearance.max_clear_width_m, 3),
+            "pinch_point_station_m": pinch_station_m,
+            "bottleneck_lonlat": list(clearance.bottleneck_point_lonlat),
+            "debris_area_m2": round(clearance.debris_area_m2, 3),
+            "water_area_m2": round(clearance.water_area_m2, 3),
+            "has_water_obstruction": clearance.has_water_obstruction,
+            "passability": clearance.passability.to_dict(),
+            "reason": clearance.reason,
+            "ray_count": len(clearance.cross_sections),
+        },
+        "features": features,
+    }
+
+
+def extract_corridor_aerial_crop_png(
+    raster_path: str | Path,
+    lon: float,
+    lat: float,
+    size_px: int = 256,
+) -> bytes:
+    """
+    Extract a real `size_px x size_px` (256x256) RGB PNG aerial patch centered on
+    `(lon, lat)` directly from `data/noaa_michael_mexico_beach.tif` using Rasterio
+    window reading.
+    """
+    import io
+    from PIL import Image
+
+    raster_path = Path(raster_path)
+    if not raster_path.exists():
+        img = Image.new("RGB", (size_px, size_px), color=(30, 41, 59))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    with rasterio.open(raster_path) as src:
+        if src.crs and src.crs.to_string() != WGS84_CRS:
+            transformer = Transformer.from_crs(WGS84_CRS, src.crs, always_xy=True)
+            x_coord, y_coord = transformer.transform(lon, lat)
+        else:
+            x_coord, y_coord = lon, lat
+
+        row, col = src.index(x_coord, y_coord)
+        half = size_px // 2
+
+        col_off = max(0, min(int(col - half), max(0, src.width - size_px)))
+        row_off = max(0, min(int(row - half), max(0, src.height - size_px)))
+        win_w = min(size_px, src.width - col_off)
+        win_h = min(size_px, src.height - row_off)
+
+        window = Window(col_off=col_off, row_off=row_off, width=win_w, height=win_h)
+        band_indices = [1, 2, 3] if src.count >= 3 else [1] * 3
+        arr = src.read(band_indices, window=window)
+
+        rgb = np.transpose(arr, (1, 2, 0))
+        img = Image.fromarray(rgb.astype(np.uint8), mode="RGB")
+        if img.size != (size_px, size_px):
+            img = img.resize((size_px, size_px))
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        return buf.getvalue()
+

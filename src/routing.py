@@ -177,6 +177,7 @@ class ChokePointROIRecommendation:
     def to_dict(self) -> dict[str, Any]:
         return {
             "rank": self.rank,
+            "edge_id": f"{self.edge_u}-{self.edge_v}-{self.edge_key}",
             "edge_u": self.edge_u,
             "edge_v": self.edge_v,
             "edge_key": self.edge_key,

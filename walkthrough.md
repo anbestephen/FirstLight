@@ -94,4 +94,21 @@ All 5 phases (Phase 0 through Milestone 4) have been implemented and verified:
 - [index.html](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/ui/index.html), [app.js](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/ui/app.js), and [style.css](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/ui/style.css):
   - Standalone zero-CDN single-page field dashboard with local vendored Leaflet (`/vendor/leaflet.js`, `/vendor/leaflet.css`), vehicle class selector toggle (`ATV >=1.2m`, `Ambulance >=2.2m`, `Fire Engine >=3.5m`), live VLM Tier & hardware status pills, interactive **Simulate Clearance** ROI queue, and responsive mobile touch layout.
 - [test_app.py](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/tests/test_app.py):
-  - **6/6 FastAPI & zero-CDN integrity tests passing** (**36/36 total tests passing** across `test_geometry.py`, `test_failover.py`, `test_routing.py`, and `test_app.py`).
+  - **8/8 FastAPI, Caliper Ray, Aerial Crop, Comms Blackout, & zero-CDN integrity tests passing** (**38/38 total tests passing** across `test_geometry.py`, `test_failover.py`, `test_routing.py`, and `test_app.py`).
+
+---
+
+## Milestone 5: Visual Telemetry & Judge-Ready Inspection Enhancements
+
+### Implemented Features & Endpoints
+1. **5m Orthogonal Caliper Rays & SAM 3.1 Masks (`GET /api/choke-point/{edge_id}/caliper`):**
+   - [`build_edge_caliper_geojson`](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/src/geometry.py#L945-L1142) & [`get_choke_point_caliper`](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/src/app.py#L580-L625): Returns an `EPSG:4326` GeoJSON `FeatureCollection` derived from `EPSG:32616` (`0.2804 m/px` GSD) containing the SAM 3.1 `debris_mask` and `water_mask` polygons alongside the `5.0m` orthogonal cross-section `caliper_ray` segments (`station_m`, `clear_width_m`, `is_pinch_point`, `atv`, `ambulance`, `fire_engine`).
+2. **Real NOAA GeoTIFF Corridor Aerial Crop (`GET /api/choke-point/{edge_id}/crop.png`):**
+   - [`extract_corridor_aerial_crop_png`](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/src/geometry.py#L1145-L1185) & [`get_choke_point_crop_png`](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/src/app.py#L628-L639): Extracts a real `256×256` RGB PNG satellite patch centered on the road edge's midpoint directly from [noaa_michael_mexico_beach.tif](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/data/noaa_michael_mexico_beach.tif) using `rasterio.windows.Window`.
+3. **Interactive Comms Blackout Switch & Live VLM Inspector (`POST /api/assess`):**
+   - [`post_assess`](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/src/app.py#L642-L725) & [`VLMFailoverRouter.assess_damage_async`](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/src/failover.py#L648-L717): Accepts `edge_id` and `force_offline: bool`. When `force_offline=False`, attempts Tier 1 (`https://api.meta.ai/v1/chat/completions` with `2.5s` timeout) on the corridor's real `256×256` aerial crop before failing over to Tier 2 (`mlx-vlm` 4-bit) / Tier 3 (`deterministic`). When `force_offline=True` ("Simulate Comms Blackout"), intentionally bypasses Tier 1 (`tier_1_cloud:bypassed:force_offline`) to demonstrate instant Apple Silicon Edge Failover with `latency_ms` and `memory_cleared: true`.
+4. **Frontend Visual Inspector & Field Manifest Export ([index.html](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/ui/index.html), [app.js](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/ui/app.js), [style.css](file:///Users/ambes/Documents/projects/anbesatechllc/FirstLight/ui/style.css)):**
+   - Added `[ Simulate Comms Blackout (Force Edge Mode) ]` toggle switch in the top header bar.
+   - Added `[ Show SAM 3.1 Masks & 5m Caliper Rays ]` toggle that renders color-coded 5m orthogonal measurement rays (green $\ge 3.5\text{m}$, amber $1.2\text{–}3.5\text{m}$, red at the minimum pinch point) and SAM 3.1 debris/water polygon masks when any choke point or road is clicked.
+   - Added the **Corridor AI Inspector** dock displaying the live `/api/choke-point/{edge_id}/crop.png` aerial patch, exact `clear_width_m` pinch-point caliper reading, active Tier badge, `latency_ms`, and VLM damage rationale.
+   - Added `[ Export Field Manifest (GeoJSON) ]` button to download the active route, turn-by-turn steps, and top ROI choke points as a local `.geojson` file.

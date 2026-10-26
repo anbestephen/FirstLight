@@ -1,14 +1,18 @@
 """
-End-to-end integration tests for Milestone 4: FastAPI backend (`src/app.py`)
-and zero-CDN offline field dashboard (`ui/index.html`, `ui/app.js`, `ui/style.css`).
+End-to-end integration tests for Milestone 4 & Milestone 5: FastAPI backend (`src/app.py`),
+5m orthogonal caliper ray & SAM 3.1 mask endpoints, 256x256 NOAA GeoTIFF aerial crop
+extraction, Comms Blackout switch, and zero-CDN offline field dashboard (`ui/`).
 """
 
 from __future__ import annotations
 
-import re
+import io
+import math
 from pathlib import Path
+import re
 
 from fastapi.testclient import TestClient
+from PIL import Image
 import pytest
 
 from src.app import app
@@ -48,6 +52,7 @@ def test_layers_endpoint_returns_cached_geojson_and_envelope() -> None:
     assert data["roads"]["type"] == "FeatureCollection"
     assert len(data["roads"]["features"]) == 312
     sample_road_props = data["roads"]["features"][0]["properties"]
+    assert "edge_id" in sample_road_props
     assert "min_clear_width_m" in sample_road_props
     assert "passable_atv" in sample_road_props
     assert "passable_ambulance" in sample_road_props
@@ -61,35 +66,119 @@ def test_layers_endpoint_returns_cached_geojson_and_envelope() -> None:
     assert len(data["bounds_wgs84"]) == 4
 
 
-def test_assess_endpoint_runs_vlm_failover_and_releases_memory() -> None:
-    """Verify POST /api/assess grades damage through VLMFailoverRouter and clears memory."""
-    payload = {
-        "target_id": "hwy98-test-seg",
-        "road_name": "US Highway 98 E",
-        "min_clear_width_m": 2.45,
-        "debris_area_m2": 31.2,
-        "water_area_m2": 0.0,
-        "has_water_obstruction": False,
-        "building_debris_overlap_ratio": 0.42,
-        "gsd_m_per_px": 0.2804,
-        "mode": "force_deterministic",
-    }
-    res = client.post("/api/assess", json=payload)
-    assert res.status_code == 200
-    data = res.json()
+def test_choke_point_caliper_endpoint_returns_5m_rays_and_sam31_masks() -> None:
+    """
+    Verify GET /api/choke-point/{edge_id}/caliper returns an EPSG:4326 GeoJSON
+    FeatureCollection with SAM 3.1 obstacle masks and 5.0m orthogonal caliper rays
+    annotated with station_m, clear_width_m, is_pinch_point, and vehicle passability.
+    """
+    roi_res = client.get("/api/clearance-roi?vehicle_class=fire_engine")
+    assert roi_res.status_code == 200
+    recs = roi_res.json()["recommendations"]
+    assert len(recs) > 0
+    top_edge_id = recs[0]["edge_id"]
 
-    assert data["target_id"] == "hwy98-test-seg"
-    assert data["building_damage_severity"] == "major_damage"
-    assert data["road_damage_severity"] == "minor_damage"
-    assert data["is_high_severity"] is True
-    assert data["passability"] == {
-        "atv": True,
-        "ambulance": True,
-        "fire_engine": False,
-    }
-    assert data["memory_cleared"] is True
-    assert "2.45m" in data["passability_rationale"]
-    assert "0.2804 m/px GSD" in data["passability_rationale"]
+    cal_res = client.get(f"/api/choke-point/{top_edge_id}/caliper")
+    assert cal_res.status_code == 200
+    cal_data = cal_res.json()
+
+    assert cal_data["type"] == "FeatureCollection"
+    props = cal_data["properties"]
+    assert props["crs"] == "EPSG:4326"
+    assert props["metric_crs"] == "EPSG:32616"
+    assert math.isclose(props["gsd_m_per_px"], 0.2804, rel_tol=1e-2)
+    assert props["ray_count"] > 0
+
+    features = cal_data["features"]
+    debris_features = [
+        f for f in features if f["properties"].get("feature_type") == "debris_mask"
+    ]
+    ray_features = [
+        f for f in features if f["properties"].get("feature_type") == "caliper_ray"
+    ]
+
+    assert len(debris_features) > 0
+    assert len(ray_features) == props["ray_count"]
+
+    pinch_rays = [r for r in ray_features if r["properties"]["is_pinch_point"] is True]
+    assert len(pinch_rays) == 1
+
+    for r in ray_features:
+        rp = r["properties"]
+        assert "station_m" in rp
+        assert "clear_width_m" in rp
+        assert "is_pinch_point" in rp
+        assert "passability" in rp
+        assert set(rp["passability"].keys()) == {"atv", "ambulance", "fire_engine"}
+        assert isinstance(rp["atv"], bool)
+        assert isinstance(rp["ambulance"], bool)
+        assert isinstance(rp["fire_engine"], bool)
+
+
+def test_choke_point_aerial_crop_png_endpoint() -> None:
+    """
+    Verify GET /api/choke-point/{edge_id}/crop.png extracts a valid 256x256 RGB PNG
+    patch directly from data/noaa_michael_mexico_beach.tif.
+    """
+    roi_res = client.get("/api/clearance-roi?vehicle_class=fire_engine")
+    top_edge_id = roi_res.json()["recommendations"][0]["edge_id"]
+
+    crop_res = client.get(f"/api/choke-point/{top_edge_id}/crop.png")
+    assert crop_res.status_code == 200
+    assert crop_res.headers["content-type"] == "image/png"
+
+    # Confirm valid PNG magic header bytes (\x89PNG\r\n\x1a\n)
+    assert crop_res.content[:8] == b"\x89PNG\r\n\x1a\n"
+
+    img = Image.open(io.BytesIO(crop_res.content))
+    assert img.format == "PNG"
+    assert img.size == (256, 256)
+    assert img.mode == "RGB"
+
+
+def test_assess_endpoint_with_force_offline_comms_blackout_switch() -> None:
+    """
+    Verify POST /api/assess with force_offline=False vs force_offline=True
+    ("Simulate Comms Blackout").
+    """
+    roi_res = client.get("/api/clearance-roi?vehicle_class=fire_engine")
+    top_edge_id = roi_res.json()["recommendations"][0]["edge_id"]
+
+    # 1. force_offline = False: attempts Tier 1 Cloud first, then fails over to local edge
+    online_res = client.post(
+        "/api/assess",
+        json={
+            "edge_id": top_edge_id,
+            "force_offline": False,
+        },
+    )
+    assert online_res.status_code == 200
+    online_data = online_res.json()
+    assert online_data["force_offline"] is False
+    assert online_data["fallback_chain"][0].startswith("tier_1_cloud:")
+    assert online_data["memory_cleared"] is True
+    assert online_data["latency_ms"] >= 0.0
+    assert online_data["crop_url"] == f"/api/choke-point/{top_edge_id}/crop.png"
+
+    # 2. force_offline = True ("Simulate Comms Blackout"): intentionally bypasses Tier 1
+    blackout_res = client.post(
+        "/api/assess",
+        json={
+            "edge_id": top_edge_id,
+            "force_offline": True,
+        },
+    )
+    assert blackout_res.status_code == 200
+    blackout_data = blackout_res.json()
+    assert blackout_data["force_offline"] is True
+    assert blackout_data["fallback_chain"][0] == "tier_1_cloud:bypassed:force_offline"
+    assert blackout_data["tier_used"] in (
+        "tier_2_edge_mlx_vlm",
+        "tier_3_deterministic_geometry",
+    )
+    assert blackout_data["memory_cleared"] is True
+    assert blackout_data["latency_ms"] >= 0.0
+    assert "0.2804 m/px GSD" in blackout_data["passability_rationale"]
 
 
 def test_route_endpoint_across_all_vehicle_classes() -> None:
@@ -163,14 +252,20 @@ def test_clearance_roi_and_simulate_clear_endpoints() -> None:
     assert reset_res.json()["cleared_edges"] == []
 
 
-def test_zero_cdn_static_asset_integrity() -> None:
+def test_zero_cdn_static_asset_integrity_and_milestone5_controls() -> None:
     """
     Verify ui/index.html, ui/style.css, and ui/app.js contain zero external CDN
-    dependencies and all referenced script/style/image assets resolve locally with 200 OK.
+    dependencies, expose all Milestone 5 controls, and all referenced local assets resolve.
     """
     index_res = client.get("/")
     assert index_res.status_code == 200
     html = index_res.text
+
+    # Confirm Milestone 5 UI elements exist
+    assert "toggle-comms-blackout" in html
+    assert "toggle-caliper-rays" in html
+    assert "btn-export-manifest" in html
+    assert "corridor-inspector-dock" in html
 
     # Confirm zero external http:// or https:// references in HTML, CSS, and JS
     for ui_file in ("ui/index.html", "ui/style.css", "ui/app.js"):

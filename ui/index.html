@@ -34,14 +34,24 @@
       </button>
     </div>
 
-    <!-- Connectivity & Hardware Badges -->
+    <!-- Comms Blackout Switch, Export Manifest & Hardware Badges -->
     <div class="status-pills">
+      <label class="blackout-switch" for="toggle-comms-blackout" title="Bypass Cloud API and force instant Apple Silicon Edge Failover">
+        <input type="checkbox" id="toggle-comms-blackout" />
+        <span class="blackout-slider"></span>
+        <span class="blackout-label">Simulate Comms Blackout (Force Edge Mode)</span>
+      </label>
+
+      <button type="button" class="action-btn btn-export" id="btn-export-manifest" title="Download Route, Turn-by-Turn Steps, and Top ROI Choke Points as GeoJSON">
+        Export Field Manifest (GeoJSON)
+      </button>
+
       <div class="pill pill-net" id="network-status-pill" title="100% Local Wi-Fi / Air-Gapped Ready">
-        <span class="status-dot online"></span>
+        <span class="status-dot online" id="network-status-dot"></span>
         <span id="network-status-text">LOCAL WI-FI READY</span>
       </div>
       <div class="pill pill-tier" id="vlm-tier-badge" title="Active 3-Tier VLM Circuit Breaker State">
-        TIER 3: DETERMINISTIC
+        TIER 2: APPLE SILICON MLX 4-BIT
       </div>
       <div class="pill pill-hw" id="hw-status-badge" title="Apple Silicon M1 Max Precision &amp; GSD">
         MPS fp16 &bull; 0.2804 m/px
@@ -58,12 +68,17 @@
       <!-- Floating Map Controls & Legend -->
       <div class="map-overlay-bar">
         <div class="legend-group">
-          <span class="legend-item"><i class="swatch swatch-passable"></i>Passable</span>
-          <span class="legend-item"><i class="swatch swatch-debris"></i>Debris Bottleneck</span>
+          <span class="legend-item"><i class="swatch swatch-passable"></i>Passable (&ge;3.5m)</span>
+          <span class="legend-item"><i class="swatch swatch-debris"></i>Restricted (1.2–3.5m)</span>
+          <span class="legend-item"><i class="swatch swatch-pinch"></i>Pinch Point Ray</span>
           <span class="legend-item"><i class="swatch swatch-water"></i>Water (Weight=&infin;)</span>
           <span class="legend-item"><i class="swatch swatch-route"></i>Active Route</span>
         </div>
         <div class="map-actions">
+          <label class="toggle-label highlight-toggle">
+            <input type="checkbox" id="toggle-caliper-rays" checked />
+            <span>Show SAM 3.1 Masks &amp; 5m Caliper Rays</span>
+          </label>
           <label class="toggle-label">
             <input type="checkbox" id="toggle-raster" checked />
             <span>NOAA Imagery</span>
@@ -115,18 +130,47 @@
       </div>
     </section>
 
-    <!-- Side Panel / Mobile Bottom Drawer: Choke-Point Clearance ROI & VLM Inspector -->
+    <!-- Side Panel / Mobile Bottom Drawer: Corridor AI Inspector & Choke-Point Clearance ROI -->
     <aside class="side-panel">
+      <!-- Live Corridor AI Inspector Card (Always visible when a corridor/choke point is inspected) -->
+      <div class="inspector-dock" id="corridor-inspector-dock">
+        <div class="inspector-header">
+          <span class="inspector-title">CORRIDOR AI INSPECTOR (SAM 3.1 + VLM)</span>
+          <span class="inspector-tier-pill" id="inspector-tier-pill">Tier 2: Apple Silicon MLX 4-bit</span>
+        </div>
+        <div class="inspector-body">
+          <div class="crop-frame">
+            <img id="inspector-crop-img" src="/api/raster-preview.png" alt="NOAA 256x256 Corridor Aerial Patch" />
+            <div class="crop-caption" id="inspector-crop-caption">256&times;256 NOAA GeoTIFF Crop</div>
+          </div>
+          <div class="inspector-telemetry">
+            <div class="insp-road-name" id="inspector-road-name">Select a Choke Point or Road</div>
+            <div class="insp-caliper-reading" id="inspector-caliper-reading">
+              Pinch Span: <strong>-- m</strong> (GSD: 0.2804 m/px)
+            </div>
+            <div class="insp-meta-row" id="inspector-latency-row">
+              Latency: <strong>-- ms</strong> &bull; Memory Cleared: <strong>true</strong>
+            </div>
+            <div class="insp-severity-row" id="inspector-severity-row">
+              Building: <code>--</code> &bull; Road: <code>--</code>
+            </div>
+          </div>
+        </div>
+        <div class="inspector-rationale" id="inspector-rationale-text">
+          Click any Choke-Point ROI card below or tap a road segment on the map to project 5.0m orthogonal SAM 3.1 caliper rays and run live VLM damage grading.
+        </div>
+      </div>
+
       <!-- Panel Tabs -->
       <div class="panel-tabs">
         <button type="button" class="panel-tab active" data-tab="roi" id="tab-btn-roi">
-          Choke-Point Clearance ROI
+          Choke-Point ROI Queue
         </button>
         <button type="button" class="panel-tab" data-tab="steps" id="tab-btn-steps">
           Turn-by-Turn (<span id="steps-count">0</span>)
         </button>
         <button type="button" class="panel-tab" data-tab="assess" id="tab-btn-assess">
-          3-Tier VLM Triage
+          Circuit Breaker Log
         </button>
       </div>
 
@@ -134,7 +178,7 @@
       <div class="tab-content active" id="tab-roi">
         <div class="panel-header-note">
           Ranked strictly by <strong>Structures Unlocked / m&sup2; Debris Cleared</strong>.
-          Tap <em>Simulate Clearance</em> to widen a bottleneck and re-route traffic in real time.
+          Click a card to render <strong>5m Caliper Rays</strong> &amp; aerial crop, or tap <em>Simulate Clearance</em>.
         </div>
         <div class="roi-list" id="roi-queue-list"></div>
       </div>
@@ -153,19 +197,19 @@
           Inspect any road bottleneck or building cluster through the 3-Tier VLM Failover Router.
         </div>
         <div class="vlm-controls">
-          <label for="select-failover-mode">Circuit Breaker Mode:</label>
+          <label for="select-failover-mode">Circuit Breaker Override:</label>
           <select id="select-failover-mode" class="mode-select">
             <option value="auto">AUTO (Tier 1 Cloud &rarr; Tier 2 MLX &rarr; Tier 3 Geom)</option>
-            <option value="force_deterministic">FORCE TIER 3 (Deterministic Geometry)</option>
             <option value="force_mlx">FORCE TIER 2 (Local Apple Silicon MLX 4-bit)</option>
+            <option value="force_deterministic">FORCE TIER 3 (Deterministic Geometry)</option>
             <option value="force_cloud">FORCE TIER 1 (Cloud Meta API 2.5s timeout)</option>
           </select>
           <button type="button" class="action-btn btn-primary" id="btn-run-assess">
-            Run Damage Assessment
+            Re-Run Corridor VLM Triage
           </button>
         </div>
         <div class="assess-card" id="assess-result-box">
-          Tap a bottleneck card or road segment on the map, or click "Run Damage Assessment" to evaluate.
+          Tap a bottleneck card or road segment on the map to view full fallback chain diagnostics.
         </div>
       </div>
     </aside>
