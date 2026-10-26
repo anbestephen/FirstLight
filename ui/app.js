@@ -23,6 +23,7 @@
     schematicLabel: "Deterministic Caliper Overlay (Muse Image Offline)",
     highlightedUnlockedNodes: [],
     lastCaliperGeojson: null,
+    caliperAnimToken: 0,
     boundsWgs84: [-85.4251, 29.9249, -85.3999, 29.9501],
     selectedSegment: null,
     map: null,
@@ -376,22 +377,24 @@
     updateUnlockedStructuresHighlight(state.activeEdgeId);
     updateInspectorImage();
 
-    // Fetch caliper GeoJSON and VLM assessment concurrently
-    const [caliperRes] = await Promise.all([
-      fetch(`/api/choke-point/${encodeURIComponent(state.activeEdgeId)}/caliper`),
-      runVlmAssessmentForEdge(state.activeEdgeId),
-    ]);
+    // Render the SAM 3.1 caliper as soon as it arrives; VLM grading (seconds) runs alongside.
+    const inspectedEdgeId = state.activeEdgeId;
+    const vlmDone = runVlmAssessmentForEdge(inspectedEdgeId);
+    const caliperRes = await fetch(`/api/choke-point/${encodeURIComponent(inspectedEdgeId)}/caliper`);
 
-    if (caliperRes.ok) {
+    if (caliperRes.ok && state.activeEdgeId === inspectedEdgeId) {
       const caliperGeojson = await caliperRes.json();
       state.lastCaliperGeojson = caliperGeojson;
       const cProps = caliperGeojson.properties || {};
-      if (cProps.min_clear_width_m !== undefined) {
+      const animate = Boolean(zoomToCorridor) && !PREFERS_REDUCED_MOTION;
+      if (cProps.min_clear_width_m !== undefined && !animate) {
         updateCaliperThresholdGauge(cProps.min_clear_width_m, Boolean(cProps.has_water_obstruction));
       }
       updateSamConfidenceAndReconBadge(cProps.sam_confidence, cProps.needs_drone_recon);
-      renderCaliperLayer(caliperGeojson, Boolean(zoomToCorridor));
+      // Replay the measurement when the user explicitly picks a corridor.
+      renderCaliperLayer(caliperGeojson, Boolean(zoomToCorridor), animate);
     }
+    await vlmDone;
     await refreshMetaModelsTelemetry();
   }
 
@@ -411,13 +414,239 @@
     }
   }
 
-  function renderCaliperLayer(caliperGeojson, zoomToCorridor) {
+  const PREFERS_REDUCED_MOTION = Boolean(
+    window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+
+  function sleep(ms) {
+    return new Promise(function (resolve) {
+      setTimeout(resolve, ms);
+    });
+  }
+
+  function maskSourceLabel(source) {
+    const s = String(source || "").toLowerCase();
+    if (s === "sam-3.1") return "SAM 3.1";
+    if (s.includes("sim")) return "Simulated";
+    return source || "Unknown";
+  }
+
+  function caliperRayStyle(fp, emphasizePinch) {
+    const w = Number(fp.clear_width_m || 0);
+    if ((emphasizePinch && fp.is_pinch_point) || fp.water_intersected || w < 1.2) {
+      return { color: "#ef4444", weight: 5, opacity: 1.0 };
+    }
+    if (w >= 3.5) {
+      return { color: "#10b981", weight: 3, opacity: 0.9 };
+    }
+    return { color: "#f59e0b", weight: 3.5, opacity: 0.95 };
+  }
+
+  function caliperFeatureStyle(feature) {
+    const fp = feature.properties || {};
+    if (fp.feature_type === "road_corridor") {
+      return {
+        color: "#38bdf8",
+        fillColor: "#0284c7",
+        weight: 1,
+        fillOpacity: 0.14,
+        dashArray: "3, 3",
+      };
+    }
+    if (fp.feature_type === "debris_mask") {
+      return {
+        color: "#ea580c",
+        fillColor: "#f97316",
+        weight: 2,
+        fillOpacity: 0.55,
+      };
+    }
+    if (fp.feature_type === "water_mask") {
+      return {
+        color: "#9333ea",
+        fillColor: "#a855f7",
+        weight: 2,
+        fillOpacity: 0.6,
+      };
+    }
+    if (fp.feature_type === "caliper_ray") {
+      return caliperRayStyle(fp, true);
+    }
+    return { color: "#94a3b8", weight: 2 };
+  }
+
+  function bindCaliperTooltip(feature, layer) {
+    const fp = feature.properties || {};
+    if (fp.feature_type === "caliper_ray") {
+      const badge = fp.is_pinch_point ? " [MIN PINCH POINT]" : "";
+      layer.bindTooltip(
+        `<strong>5m Caliper Ray @ ${fp.station_m}m${badge}</strong><br/>` +
+        `Clear Width: <strong>${fp.clear_width_m}m</strong><br/>` +
+        `ATV: ${fp.atv ? "PASS" : "BLOCKED"} | Amb: ${fp.ambulance ? "PASS" : "BLOCKED"} | Fire: ${fp.fire_engine ? "PASS" : "BLOCKED"}`,
+        { sticky: true }
+      );
+    } else if (fp.feature_type === "debris_mask") {
+      layer.bindTooltip(
+        `<strong>SAM 3.1 Debris Mask</strong><br/>Area: ${fp.area_m2} m² (GSD: ${fp.gsd_m_per_px} m/px)`,
+        { sticky: true }
+      );
+    } else if (fp.feature_type === "water_mask") {
+      layer.bindTooltip(
+        `<strong>SAM 3.1 Standing Water Mask</strong><br/>Area: ${fp.area_m2} m² (Weight = &infin;)`,
+        { sticky: true }
+      );
+    }
+  }
+
+  function showCaliperScanReadout(html, isVerdict) {
+    const el = document.getElementById("caliper-scan-readout");
+    if (!el) return;
+    el.innerHTML = html;
+    el.classList.toggle("verdict", Boolean(isVerdict));
+    el.classList.remove("hidden");
+  }
+
+  function hideCaliperScanReadout() {
+    const el = document.getElementById("caliper-scan-readout");
+    if (el) el.classList.add("hidden");
+  }
+
+  function caliperVerdictText(props) {
+    const minW = Number(props.min_clear_width_m || 0).toFixed(2);
+    if (props.has_water_obstruction) {
+      return `Standing water across the road &rarr; <strong>impassable for every vehicle</strong>`;
+    }
+    const pass = props.passability || {};
+    const names = { fire_engine: "Fire engine", ambulance: "Ambulance", atv: "ATV" };
+    const ok = [];
+    const blocked = [];
+    ["fire_engine", "ambulance", "atv"].forEach(function (vc) {
+      (pass[vc] ? ok : blocked).push(names[vc]);
+    });
+    const verdict = [
+      ok.length ? `<span class="verdict-pass">${ok.join(" &amp; ")} pass</span>` : "",
+      blocked.length ? `<span class="verdict-block">${blocked.join(" &amp; ")} blocked</span>` : "",
+    ]
+      .filter(Boolean)
+      .join(" &middot; ");
+    return (
+      `Narrowest clear span <strong>${minW} m</strong> at ` +
+      `${Number(props.pinch_point_station_m || 0).toFixed(0)} m &rarr; ${verdict}`
+    );
+  }
+
+  /**
+   * Replay the SAM 3.1 caliper measurement on the map: masks fade in, then each 5 m
+   * cross-section is cast in station order while the live readout and threshold gauge
+   * track the narrowest clear span found so far. Every number shown comes from the
+   * `/caliper` response; the animation only changes when it is revealed.
+   */
+  async function animateCaliperSweep(caliperGeojson, token) {
+    const props = caliperGeojson.properties || {};
+    const features = caliperGeojson.features || [];
+    const maskFeatures = features.filter(function (f) {
+      return (f.properties || {}).feature_type !== "caliper_ray";
+    });
+    const rays = features
+      .filter(function (f) {
+        return (f.properties || {}).feature_type === "caliper_ray";
+      })
+      .sort(function (a, b) {
+        return Number(a.properties.station_m) - Number(b.properties.station_m);
+      });
+    const stillCurrent = function () {
+      return token === state.caliperAnimToken && state.showCaliperRays;
+    };
+
+    L.geoJSON(
+      { type: "FeatureCollection", features: maskFeatures },
+      {
+        style: function (f) {
+          return Object.assign({}, caliperFeatureStyle(f), { className: "caliper-fade-in" });
+        },
+        onEachFeature: bindCaliperTooltip,
+      }
+    ).addTo(state.caliperLayer);
+
+    const source = maskSourceLabel(props.mask_source);
+    if (rays.length) {
+      const first = rays[0].properties || {};
+      updateCaliperThresholdGauge(first.clear_width_m, Boolean(first.water_intersected));
+    }
+    showCaliperScanReadout(
+      `<span class="scan-label">${source} masks</span> Casting ${rays.length} cross-sections every 5 m&hellip;`
+    );
+    await sleep(500);
+
+    const stepMs = Math.min(140, Math.max(40, 2400 / Math.max(1, rays.length)));
+    let narrowest = Infinity;
+    let sawWater = false;
+    for (const ray of rays) {
+      if (!stillCurrent()) return;
+      const fp = ray.properties || {};
+      const fullRay = (fp.full_ray_coords_wgs84 || []).map(function (c) {
+        return [c[1], c[0]];
+      });
+      const probe =
+        fullRay.length >= 2
+          ? L.polyline(fullRay, {
+              color: "#e2e8f0",
+              weight: 1.5,
+              opacity: 0.85,
+              dashArray: "3, 4",
+              interactive: false,
+            }).addTo(state.caliperLayer)
+          : null;
+      L.geoJSON(ray, {
+        style: function (f) {
+          return caliperRayStyle(f.properties || {}, false);
+        },
+        onEachFeature: bindCaliperTooltip,
+      }).addTo(state.caliperLayer);
+
+      const w = Number(fp.clear_width_m || 0);
+      narrowest = Math.min(narrowest, w);
+      sawWater = sawWater || Boolean(fp.water_intersected);
+      updateCaliperThresholdGauge(narrowest, sawWater);
+      showCaliperScanReadout(
+        `<span class="scan-label">${source} caliper</span> Station ${Number(fp.station_m).toFixed(0)} m &middot; ` +
+        `<strong>${w.toFixed(2)} m</strong> clear &middot; narrowest so far ${narrowest.toFixed(2)} m`
+      );
+      await sleep(stepMs);
+      if (probe) state.caliperLayer.removeLayer(probe);
+    }
+    if (!stillCurrent()) return;
+
+    const pinch = rays.find(function (r) {
+      return (r.properties || {}).is_pinch_point;
+    });
+    if (pinch) {
+      L.geoJSON(pinch, {
+        style: { color: "#ef4444", weight: 9, opacity: 1, className: "pinch-pulse" },
+        onEachFeature: bindCaliperTooltip,
+      }).addTo(state.caliperLayer);
+    }
+    updateCaliperThresholdGauge(props.min_clear_width_m, Boolean(props.has_water_obstruction));
+    showCaliperScanReadout(caliperVerdictText(props), true);
+    await sleep(7000);
+    if (stillCurrent()) hideCaliperScanReadout();
+  }
+
+  function renderCaliperLayer(caliperGeojson, zoomToCorridor, animate) {
+    // Any new render cancels an in-flight sweep.
+    state.caliperAnimToken += 1;
     state.caliperLayer.clearLayers();
+    hideCaliperScanReadout();
     if (!caliperGeojson || !state.showCaliperRays) {
       return;
     }
 
     const props = caliperGeojson.properties || {};
+    const roadNameEl = document.getElementById("inspector-road-name");
+    if (roadNameEl && (props.road_name || props.edge_id)) {
+      // Keep the heading in sync with the measurement while VLM grading is still running.
+      roadNameEl.textContent = props.road_name || props.edge_id;
+    }
     const caliperReadingEl = document.getElementById("inspector-caliper-reading");
     if (caliperReadingEl && props.min_clear_width_m !== undefined) {
       caliperReadingEl.innerHTML =
@@ -426,73 +655,20 @@
         `(${props.ray_count || 0} rays @ ${props.gsd_m_per_px} m/px)`;
     }
 
-    const geojsonLayer = L.geoJSON(caliperGeojson, {
-      style: function (feature) {
-        const fp = feature.properties || {};
-        if (fp.feature_type === "road_corridor") {
-          return {
-            color: "#38bdf8",
-            fillColor: "#0284c7",
-            weight: 1,
-            fillOpacity: 0.14,
-            dashArray: "3, 3",
-          };
-        }
-        if (fp.feature_type === "debris_mask") {
-          return {
-            color: "#ea580c",
-            fillColor: "#f97316",
-            weight: 2,
-            fillOpacity: 0.55,
-          };
-        }
-        if (fp.feature_type === "water_mask") {
-          return {
-            color: "#9333ea",
-            fillColor: "#a855f7",
-            weight: 2,
-            fillOpacity: 0.6,
-          };
-        }
-        if (fp.feature_type === "caliper_ray") {
-          const w = Number(fp.clear_width_m || 0);
-          if (fp.is_pinch_point || fp.water_intersected || w < 1.2) {
-            return { color: "#ef4444", weight: 5, opacity: 1.0 };
-          }
-          if (w >= 3.5) {
-            return { color: "#10b981", weight: 3, opacity: 0.9 };
-          }
-          return { color: "#f59e0b", weight: 3.5, opacity: 0.95 };
-        }
-        return { color: "#94a3b8", weight: 2 };
-      },
-      onEachFeature: function (feature, layer) {
-        const fp = feature.properties || {};
-        if (fp.feature_type === "caliper_ray") {
-          const badge = fp.is_pinch_point ? " [MIN PINCH POINT]" : "";
-          layer.bindTooltip(
-            `<strong>5m Caliper Ray @ ${fp.station_m}m${badge}</strong><br/>` +
-            `Clear Width: <strong>${fp.clear_width_m}m</strong><br/>` +
-            `ATV: ${fp.atv ? "PASS" : "BLOCKED"} | Amb: ${fp.ambulance ? "PASS" : "BLOCKED"} | Fire: ${fp.fire_engine ? "PASS" : "BLOCKED"}`,
-            { sticky: true }
-          );
-        } else if (fp.feature_type === "debris_mask") {
-          layer.bindTooltip(
-            `<strong>SAM 3.1 Debris Mask</strong><br/>Area: ${fp.area_m2} m² (GSD: ${fp.gsd_m_per_px} m/px)`,
-            { sticky: true }
-          );
-        } else if (fp.feature_type === "water_mask") {
-          layer.bindTooltip(
-            `<strong>SAM 3.1 Standing Water Mask</strong><br/>Area: ${fp.area_m2} m² (Weight = &infin;)`,
-            { sticky: true }
-          );
-        }
-      },
-    }).addTo(state.caliperLayer);
-
-    if (zoomToCorridor && geojsonLayer.getBounds && geojsonLayer.getBounds().isValid()) {
-      state.map.fitBounds(geojsonLayer.getBounds().pad(0.45), { maxZoom: 18 });
+    const bounds = L.geoJSON(caliperGeojson).getBounds();
+    if (zoomToCorridor && bounds.isValid()) {
+      state.map.fitBounds(bounds.pad(0.45), { maxZoom: 18 });
     }
+
+    if (animate && !PREFERS_REDUCED_MOTION) {
+      animateCaliperSweep(caliperGeojson, state.caliperAnimToken);
+      return;
+    }
+
+    L.geoJSON(caliperGeojson, {
+      style: caliperFeatureStyle,
+      onEachFeature: bindCaliperTooltip,
+    }).addTo(state.caliperLayer);
   }
 
   async function refreshRoute() {
@@ -830,6 +1006,9 @@
     document.getElementById("inspector-latency-row").innerHTML = state.forceOffline
       ? `<span class="analyzing">On-device Llama 3.2 Vision analyzing aerial crop…</span>`
       : `<span class="analyzing">Muse Spark 1.3 analyzing aerial crop…</span>`;
+    // Never leave the previous corridor's grades on screen while the new one is graded.
+    document.getElementById("inspector-severity-row").innerHTML = "Building: &hellip; &bull; Road: &hellip;";
+    document.getElementById("inspector-rationale-text").textContent = "Waiting for damage grading…";
 
     const payload = {
       edge_id: String(edgeId),

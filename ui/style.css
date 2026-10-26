@@ -1171,3 +1171,72 @@ html, body {
   color: var(--accent-green);
   font-weight: 600;
 }
+
+/* SAM 3.1 caliper measurement replay */
+.caliper-scan-readout {
+  position: absolute;
+  top: 120px;
+  right: 12px;
+  z-index: 950;
+  max-width: min(420px, calc(100% - 24px));
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--accent-blue);
+  background: rgba(11, 17, 32, 0.92);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.caliper-scan-readout.verdict {
+  border-color: var(--accent-amber);
+  font-size: 13px;
+}
+
+.caliper-scan-readout .scan-label {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(56, 189, 248, 0.16);
+  color: var(--accent-blue);
+  font-weight: 700;
+}
+
+.caliper-scan-readout .verdict-pass {
+  color: var(--accent-green);
+  font-weight: 700;
+}
+
+.caliper-scan-readout .verdict-block {
+  color: var(--accent-red);
+  font-weight: 700;
+}
+
+path.caliper-fade-in {
+  animation: caliper-fade-in 0.5s ease-out;
+}
+
+@keyframes caliper-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+path.pinch-pulse {
+  animation: pinch-pulse 1.1s ease-in-out 4;
+}
+
+@keyframes pinch-pulse {
+  0%, 100% { stroke-opacity: 1; }
+  50% { stroke-opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  path.caliper-fade-in,
+  path.pinch-pulse,
+  .analyzing {
+    animation: none;
+  }
+}
