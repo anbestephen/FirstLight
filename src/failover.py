@@ -28,6 +28,7 @@ import time
 from typing import Any, Callable, Literal
 
 import httpx
+import numpy as np
 from PIL import Image
 from pydantic import BaseModel, Field
 
@@ -58,7 +59,8 @@ SEVERITY_TO_SCORE: dict[DamageSeverity, int] = {
 META_MODEL_API_BASE_URL = "https://api.meta.ai/v1"
 DEFAULT_CLOUD_MODEL = "muse-spark-1.3"
 DEFAULT_LOCAL_MLX_MODEL_PATH = "models/Llama-3.2-11B-Vision-Instruct-4bit"
-DEFAULT_CLOUD_TIMEOUT_S = 2.5
+DEFAULT_CLOUD_TIMEOUT_S = 15.0
+DEFAULT_CLOUD_MAX_TOKENS = 2048
 
 
 def _format_cloud_exception(prefix: str, exc: Exception) -> str:
@@ -130,7 +132,13 @@ class DamageAssessmentResult(BaseModel):
 
 
 def normalize_damage_severity(raw_value: Any, default: DamageSeverity = "minor_damage") -> DamageSeverity:
-    """Normalize a string or integer severity label into the strict 4-class schema."""
+    """
+    Normalize a string or integer severity label into the strict 4-class schema:
+      - "none"|"intact"|"undamaged" -> "no_damage"
+      - "minor"|"light"|"moderate"|"medium" -> "minor_damage"
+      - "major"|"severe"|"heavy"|"significant" -> "major_damage"
+      - "destroyed"|"collapsed"|"catastrophic"|"total" -> "destroyed"
+    """
     if raw_value is None:
         return default
     if isinstance(raw_value, int):
@@ -145,13 +153,35 @@ def normalize_damage_severity(raw_value: Any, default: DamageSeverity = "minor_d
     text = str(raw_value).strip().lower().replace("-", "_").replace(" ", "_")
     if text in VALID_DAMAGE_SEVERITIES:
         return text  # type: ignore[return-value]
-    if "destroy" in text or "collapse" in text or "total" in text or "catastrophic" in text:
+    if (
+        "destroy" in text
+        or "collapse" in text
+        or "total" in text
+        or "catastrophic" in text
+    ):
         return "destroyed"
-    if "major" in text or "severe" in text or "heavy" in text:
+    if (
+        "major" in text
+        or "severe" in text
+        or "heavy" in text
+        or "significant" in text
+    ):
         return "major_damage"
-    if "minor" in text or "light" in text or "partial" in text or "moderate" in text:
+    if (
+        "minor" in text
+        or "light" in text
+        or "partial" in text
+        or "moderate" in text
+        or "medium" in text
+    ):
         return "minor_damage"
-    if "no_damage" in text or "none" in text or "intact" in text or "undamaged" in text or "clear" in text:
+    if (
+        "no_damage" in text
+        or "none" in text
+        or "intact" in text
+        or "undamaged" in text
+        or "clear" in text
+    ):
         return "no_damage"
     return default
 
@@ -198,8 +228,10 @@ def release_unified_memory() -> dict[str, Any]:
     }
 
 
-def _encode_image_to_base64(image_source: str | Path | Image.Image | bytes | None) -> str | None:
-    """Encode an image path, PIL Image, or raw bytes to a base64 PNG string."""
+def _encode_image_to_base64(
+    image_source: str | Path | Image.Image | np.ndarray | bytes | None,
+) -> str | None:
+    """Encode an image path, PIL Image, numpy ndarray, or raw bytes to a base64 PNG string."""
     if image_source is None:
         return None
     if isinstance(image_source, bytes):
@@ -209,6 +241,14 @@ def _encode_image_to_base64(image_source: str | Path | Image.Image | bytes | Non
         if not path.exists():
             return None
         return base64.b64encode(path.read_bytes()).decode("ascii")
+    if isinstance(image_source, np.ndarray):
+        arr = image_source
+        if arr.dtype != np.uint8:
+            arr = np.clip(arr, 0, 255).astype(np.uint8)
+        pil_img = Image.fromarray(arr)
+        buf = io.BytesIO()
+        pil_img.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode("ascii")
     if isinstance(image_source, Image.Image):
         buf = io.BytesIO()
         image_source.save(buf, format="PNG")
@@ -314,18 +354,20 @@ def evaluate_deterministic_tier3(
 
 
 def parse_vlm_json_response(
-    raw_text: str,
+    raw_text: str | None,
     telemetry: GeometricTelemetry,
+    *,
+    tier_prefix: str | None = None,
 ) -> tuple[DamageSeverity, DamageSeverity, str]:
     """
     Parse structured JSON or key-value text returned by Tier 1 (Meta API) or Tier 2 (MLX VLM)
     into `(building_damage_severity, road_damage_severity, visual_cue_summary)`.
     """
     det_b, det_r, det_cue = evaluate_deterministic_tier3(telemetry)
-    if not raw_text or not raw_text.strip():
+    if not raw_text or not str(raw_text).strip():
         return det_b, det_r, det_cue
 
-    cleaned = raw_text.strip()
+    cleaned = str(raw_text).strip()
     # Extract JSON object if wrapped in markdown fences
     start_idx = cleaned.find("{")
     end_idx = cleaned.rfind("}")
@@ -341,12 +383,16 @@ def parse_vlm_json_response(
                 parsed.get("road_damage_severity") or parsed.get("road_severity"),
                 default=det_r,
             )
-            cue = str(
+            raw_cue = str(
                 parsed.get("visual_cue_summary")
                 or parsed.get("passability_rationale")
                 or parsed.get("rationale")
-                or det_cue
+                or f"Assessed building={b_sev}, road={r_sev} on {telemetry.road_name}."
             ).strip()
+            if tier_prefix and not raw_cue.startswith(tier_prefix):
+                cue = f"{tier_prefix} {raw_cue}"
+            else:
+                cue = raw_cue
             return b_sev, r_sev, cue
         except json.JSONDecodeError:
             pass
@@ -354,7 +400,11 @@ def parse_vlm_json_response(
     # Fallback text extraction if VLM responded in prose
     b_sev = normalize_damage_severity(cleaned, default=det_b)
     r_sev = normalize_damage_severity(cleaned, default=det_r)
-    cue = cleaned.splitlines()[0][:240]
+    raw_cue = cleaned.splitlines()[0][:240].strip()
+    if tier_prefix and not raw_cue.startswith(tier_prefix):
+        cue = f"{tier_prefix} {raw_cue}"
+    else:
+        cue = raw_cue
     return b_sev, r_sev, cue
 
 
@@ -377,7 +427,19 @@ class VLMFailoverRouter:
         mode: FailoverMode = FailoverMode.AUTO,
         mlx_runner: Callable[[str, str | Path | Image.Image | None, Path], str] | None = None,
     ) -> None:
-        self.api_key = api_key if api_key is not None else os.environ.get("MODEL_API_KEY", "")
+        if api_key is not None:
+            self.api_key = api_key
+        else:
+            env_key = os.environ.get("MODEL_API_KEY", "")
+            if not env_key and "PYTEST_CURRENT_TEST" not in os.environ:
+                try:
+                    from dotenv import load_dotenv
+
+                    load_dotenv()
+                    env_key = os.environ.get("MODEL_API_KEY", "")
+                except Exception:
+                    pass
+            self.api_key = env_key
         self.api_base_url = api_base_url.rstrip("/")
         self.cloud_model = cloud_model
         self.cloud_timeout_s = float(cloud_timeout_s)
@@ -390,7 +452,6 @@ class VLMFailoverRouter:
     def _build_vlm_prompt(self, telemetry: GeometricTelemetry) -> str:
         """Create a compact, telemetry-grounded prompt requesting strict JSON output."""
         return (
-            "You are FirstLight, an emergency disaster response damage assessment system. "
             "Analyze the post-hurricane road and adjacent building condition using these exact "
             f"SAM 3.1 geometric measurements: road='{telemetry.road_name}', "
             f"min_clear_width_m={telemetry.min_clear_width_m:.2f}, "
@@ -398,7 +459,7 @@ class VLMFailoverRouter:
             f"water_area_m2={telemetry.water_area_m2:.2f}, "
             f"has_water_obstruction={telemetry.has_water_obstruction}, "
             f"gsd_m_per_px={telemetry.gsd_m_per_px:.4f}. "
-            "Respond ONLY with a JSON object containing keys: "
+            "Respond ONLY with a valid JSON object containing keys: "
             "'building_damage_severity' (one of: 'no_damage', 'minor_damage', 'major_damage', 'destroyed'), "
             "'road_damage_severity' (one of: 'no_damage', 'minor_damage', 'major_damage', 'destroyed'), "
             "and 'visual_cue_summary' (concise visual and geometric justification)."
@@ -407,12 +468,12 @@ class VLMFailoverRouter:
     def _call_tier1_cloud_sync(
         self,
         telemetry: GeometricTelemetry,
-        image_source: str | Path | Image.Image | bytes | None = None,
+        image_source: str | Path | Image.Image | np.ndarray | bytes | None = None,
         http_client: httpx.Client | None = None,
     ) -> tuple[DamageSeverity, DamageSeverity, str]:
         """
         Tier 1 (Cloud Primary): Call Meta Model API (`https://api.meta.ai/v1/chat/completions`)
-        with an explicit 2.5-second timeout.
+        with `max_tokens=2048` (accommodating `muse-spark-1.3` reasoning_tokens).
         """
         if not self.api_key:
             raise RuntimeError("MODEL_API_KEY is not set for Tier 1 Meta Model API.")
@@ -433,7 +494,7 @@ class VLMFailoverRouter:
             "model": self.cloud_model,
             "messages": [{"role": "user", "content": content}],
             "temperature": 0.0,
-            "max_tokens": 200,
+            "max_tokens": DEFAULT_CLOUD_MAX_TOKENS,
         }
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -450,16 +511,22 @@ class VLMFailoverRouter:
 
         response.raise_for_status()
         data = response.json()
-        raw_content = data["choices"][0]["message"]["content"]
-        return parse_vlm_json_response(raw_content, telemetry)
+        raw_content = data["choices"][0]["message"].get("content")
+        if not raw_content or not str(raw_content).strip():
+            raise ValueError("Empty or null message.content returned by Meta Model API")
+        return parse_vlm_json_response(
+            str(raw_content),
+            telemetry,
+            tier_prefix="[MUSE-SPARK-1.3 CLOUD VLM]",
+        )
 
     async def _call_tier1_cloud_async(
         self,
         telemetry: GeometricTelemetry,
-        image_source: str | Path | Image.Image | bytes | None = None,
+        image_source: str | Path | Image.Image | np.ndarray | bytes | None = None,
         async_client: httpx.AsyncClient | None = None,
     ) -> tuple[DamageSeverity, DamageSeverity, str]:
-        """Async Tier 1 Meta Model API call with strict 2.5s timeout."""
+        """Async Tier 1 Meta Model API call with `max_tokens=2048`."""
         if not self.api_key:
             raise RuntimeError("MODEL_API_KEY is not set for Tier 1 Meta Model API.")
 
@@ -479,7 +546,7 @@ class VLMFailoverRouter:
             "model": self.cloud_model,
             "messages": [{"role": "user", "content": content}],
             "temperature": 0.0,
-            "max_tokens": 200,
+            "max_tokens": DEFAULT_CLOUD_MAX_TOKENS,
         }
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -496,13 +563,19 @@ class VLMFailoverRouter:
 
         response.raise_for_status()
         data = response.json()
-        raw_content = data["choices"][0]["message"]["content"]
-        return parse_vlm_json_response(raw_content, telemetry)
+        raw_content = data["choices"][0]["message"].get("content")
+        if not raw_content or not str(raw_content).strip():
+            raise ValueError("Empty or null message.content returned by Meta Model API")
+        return parse_vlm_json_response(
+            str(raw_content),
+            telemetry,
+            tier_prefix="[MUSE-SPARK-1.3 CLOUD VLM]",
+        )
 
     def _call_tier2_mlx(
         self,
         telemetry: GeometricTelemetry,
-        image_source: str | Path | Image.Image | bytes | None = None,
+        image_source: str | Path | Image.Image | np.ndarray | bytes | None = None,
     ) -> tuple[DamageSeverity, DamageSeverity, str, bool]:
         """
         Tier 2 (Edge Fallback): Execute local 4-bit quantized Apple Silicon inference via
@@ -522,6 +595,14 @@ class VLMFailoverRouter:
         temp_img_path: Path | None = None
 
         try:
+            if isinstance(image_source, np.ndarray):
+                arr = (
+                    image_source
+                    if image_source.dtype == np.uint8
+                    else np.clip(image_source, 0, 255).astype(np.uint8)
+                )
+                image_source = Image.fromarray(arr)
+
             if self._custom_mlx_runner is not None:
                 img_arg = (
                     Image.open(io.BytesIO(image_source))
@@ -1053,8 +1134,7 @@ class MetaModelSuite:
         elif self.router.api_key:
             try:
                 prompt = (
-                    "You are Muse Wonder, the strategic multi-corridor incident commander AI for FirstLight. "
-                    f"Given {len(sector_priorities)} ranked choke points for vehicle_class='{vehicle_class}' "
+                    f"Given {len(sector_priorities)} ranked post-hurricane choke points for vehicle_class='{vehicle_class}' "
                     f"totalling {total_debris:.2f} m² debris and unlocking {total_structures} high-severity structures "
                     f"at {gsd_m_per_px:.4f} m/px GSD: {json.dumps(sector_priorities)}. "
                     "Provide a concise 2-sentence executive action plan grounded in these exact numbers."
@@ -1063,7 +1143,7 @@ class MetaModelSuite:
                     "model": "muse-wonder-1.0",
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.0,
-                    "max_tokens": 180,
+                    "max_tokens": DEFAULT_CLOUD_MAX_TOKENS,
                 }
                 headers = {
                     "Authorization": f"Bearer {self.router.api_key}",
@@ -1077,7 +1157,10 @@ class MetaModelSuite:
                     async with httpx.AsyncClient(timeout=timeout) as client:
                         resp = await client.post(endpoint, json=payload, headers=headers)
                 resp.raise_for_status()
-                cloud_summary = resp.json()["choices"][0]["message"]["content"].strip()
+                raw_wonder = resp.json()["choices"][0]["message"].get("content")
+                if not raw_wonder or not str(raw_wonder).strip():
+                    raise ValueError("Empty message.content from muse-wonder-1.0")
+                cloud_summary = f"[MUSE-WONDER-1.0 CLOUD ADVISOR] {str(raw_wonder).strip()}"
                 tier_used = ConnectivityTier.TIER_1_CLOUD
                 fallback_chain.append("tier_1_cloud_muse_wonder:success")
             except Exception as exc:
@@ -1165,7 +1248,7 @@ class MetaModelSuite:
                         }
                     ],
                     "temperature": 0.0,
-                    "max_tokens": 80,
+                    "max_tokens": DEFAULT_CLOUD_MAX_TOKENS,
                 }
                 headers = {
                     "Authorization": f"Bearer {self.router.api_key}",
@@ -1179,7 +1262,10 @@ class MetaModelSuite:
                     async with httpx.AsyncClient(timeout=timeout) as client:
                         resp = await client.post(endpoint, json=payload, headers=headers)
                 resp.raise_for_status()
-                transcript = resp.json()["choices"][0]["message"]["content"].strip()
+                raw_voice = resp.json()["choices"][0]["message"].get("content")
+                if not raw_voice or not str(raw_voice).strip():
+                    raise ValueError("Empty message.content from muse-voice-transcribe-1.0")
+                transcript = str(raw_voice).strip()
                 tier_used = ConnectivityTier.TIER_1_CLOUD
                 fallback_chain.append("tier_1_cloud_muse_voice:success")
             except Exception as exc:

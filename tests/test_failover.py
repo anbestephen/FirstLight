@@ -86,7 +86,7 @@ def test_tier1_cloud_meta_api_success_and_timeout_config(
             api_key="test-meta-spark-key-123",
             cloud_timeout_s=DEFAULT_CLOUD_TIMEOUT_S,
         )
-        assert router.cloud_timeout_s == 2.5
+        assert router.cloud_timeout_s == 15.0
 
         result = router.assess_damage(
             sample_telemetry_blocked_fire_engine,
@@ -100,12 +100,14 @@ def test_tier1_cloud_meta_api_success_and_timeout_config(
     assert req.headers["Authorization"] == "Bearer test-meta-spark-key-123"
     req_body = json.loads(req.content.decode("utf-8"))
     assert req_body["model"] == "muse-spark-1.3"
+    assert req_body["max_tokens"] == 2048
 
     assert result.tier_used == ConnectivityTier.TIER_1_CLOUD
     assert result.fallback_chain == ["tier_1_cloud:success"]
     assert result.building_damage_severity == "major_damage"
     assert result.road_damage_severity == "minor_damage"
     assert result.is_high_severity is True
+    assert result.visual_cue_summary.startswith("[MUSE-SPARK-1.3 CLOUD VLM]")
     assert result.passability == {
         "atv": True,
         "ambulance": True,
@@ -314,8 +316,12 @@ def test_normalize_damage_severity_and_memory_hygiene() -> None:
     """Verify severity label normalization and Apple Silicon unified memory release helper."""
     assert normalize_damage_severity("catastrophic collapse") == "destroyed"
     assert normalize_damage_severity("Severe Structural Damage") == "major_damage"
+    assert normalize_damage_severity("significant") == "major_damage"
+    assert normalize_damage_severity("moderate") == "minor_damage"
+    assert normalize_damage_severity("medium") == "minor_damage"
     assert normalize_damage_severity("partial roof loss") == "minor_damage"
     assert normalize_damage_severity("intact") == "no_damage"
+    assert normalize_damage_severity("undamaged") == "no_damage"
     assert normalize_damage_severity(3) == "destroyed"
     assert normalize_damage_severity(0) == "no_damage"
 

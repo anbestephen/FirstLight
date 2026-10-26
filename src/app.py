@@ -44,6 +44,7 @@ from src.geometry import (
     extract_corridor_aerial_crop_png,
     generate_simulated_disaster_masks_utm,
     load_and_align_roads,
+    load_sam31_masks_utm,
 )
 from src.routing import (
     VEHICLE_MIN_WIDTH_M,
@@ -66,6 +67,8 @@ VENDOR_DIR = UI_DIR / "vendor"
 GRAPHML_PATH = DATA_DIR / "osm_road_graph.graphml"
 ROADS_GEOJSON_PATH = DATA_DIR / "osm_roads.geojson"
 BUILDINGS_GEOJSON_PATH = DATA_DIR / "osm_buildings.geojson"
+BUILDINGS_GRADED_GEOJSON_PATH = DATA_DIR / "osm_buildings_graded.geojson"
+SAM31_MASKS_GEOJSON_PATH = DATA_DIR / "sam31_mexico_beach_masks.geojson"
 RASTER_TIF_PATH = DATA_DIR / "noaa_michael_mexico_beach.tif"
 
 
@@ -148,12 +151,13 @@ class BenchmarkTiersRequest(BaseModel):
 class FirstLightState:
     """In-memory state manager holding the annotated road graph, masks, layers, and failover router."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, use_simulated_masks: bool = False) -> None:
+        self.use_simulated_masks: bool = use_simulated_masks
         self.base_graph: nx.MultiDiGraph | None = None
         self.active_graph: nx.MultiDiGraph | None = None
         self.cleared_edges: list[tuple[int | str, int | str, int]] = []
         self.raster_meta: dict[str, Any] | None = None
-        self.sim_masks_utm: dict[str, MultiPolygon] | None = None
+        self.sim_masks_utm: dict[str, Any] | None = None
         self.buildings_features: list[dict[str, Any]] | None = None
         self.raster_preview_png: bytes | None = None
         self.router = VLMFailoverRouter(
@@ -185,22 +189,34 @@ class FirstLightState:
                 "native_bounds": (-85.4251, 29.9249, -85.3999, 29.9501),
             }
 
+        active_buildings_path = (
+            BUILDINGS_GRADED_GEOJSON_PATH
+            if BUILDINGS_GRADED_GEOJSON_PATH.exists()
+            else BUILDINGS_GEOJSON_PATH
+        )
+
         G = load_annotated_routing_graph(
             graphml_path=GRAPHML_PATH,
             roads_geojson_path=ROADS_GEOJSON_PATH,
             raster_path=RASTER_TIF_PATH,
-            simulate_if_no_masks=True,
+            masks_geojson_path=None if self.use_simulated_masks else SAM31_MASKS_GEOJSON_PATH,
+            simulate_if_no_masks=self.use_simulated_masks,
         )
-        G = assign_buildings_to_graph_nodes(G, buildings_source=BUILDINGS_GEOJSON_PATH)
+        G = assign_buildings_to_graph_nodes(G, buildings_source=active_buildings_path)
 
-        # Cache the simulated UTM SAM 3.1 disaster masks for caliper inspection
-        _, edges_gdf = ox.graph_to_gdfs(G)
-        roads_utm = load_and_align_roads(
-            edges_gdf.reset_index(),
-            raster_path=RASTER_TIF_PATH if RASTER_TIF_PATH.exists() else None,
-            target_crs=TARGET_METRIC_CRS,
-        )
-        self.sim_masks_utm = generate_simulated_disaster_masks_utm(roads_utm)
+        # Load the baked UTM SAM 3.1 disaster masks (`data/sam31_mexico_beach_masks.geojson`) by default
+        if not self.use_simulated_masks and SAM31_MASKS_GEOJSON_PATH.exists():
+            self.sim_masks_utm = load_sam31_masks_utm(
+                SAM31_MASKS_GEOJSON_PATH, target_crs=TARGET_METRIC_CRS
+            )
+        else:
+            _, edges_gdf = ox.graph_to_gdfs(G)
+            roads_utm = load_and_align_roads(
+                edges_gdf.reset_index(),
+                raster_path=RASTER_TIF_PATH if RASTER_TIF_PATH.exists() else None,
+                target_crs=TARGET_METRIC_CRS,
+            )
+            self.sim_masks_utm = generate_simulated_disaster_masks_utm(roads_utm)
 
         self.base_graph = G
         self.active_graph = G.copy()
@@ -370,20 +386,18 @@ class FirstLightState:
         assert self.base_graph is not None
         if self.buildings_features is None:
             features: list[dict[str, Any]] = []
-            if BUILDINGS_GEOJSON_PATH.exists():
-                gdf = gpd.read_file(BUILDINGS_GEOJSON_PATH)
+            b_path = (
+                BUILDINGS_GRADED_GEOJSON_PATH
+                if BUILDINGS_GRADED_GEOJSON_PATH.exists()
+                else BUILDINGS_GEOJSON_PATH
+            )
+            if b_path.exists():
+                gdf = gpd.read_file(b_path)
                 if gdf.crs is None:
                     gdf = gdf.set_crs(WGS84_CRS)
                 else:
                     gdf = gdf.to_crs(WGS84_CRS)
 
-                severities = [
-                    "destroyed",
-                    "minor_damage",
-                    "major_damage",
-                    "no_damage",
-                    "minor_damage",
-                ]
                 for idx, row in gdf.iterrows():
                     geom = row.geometry
                     if geom is None or geom.is_empty:
@@ -392,16 +406,24 @@ class FirstLightState:
                     nearest_n = find_nearest_node(
                         self.base_graph, float(centroid.x), float(centroid.y)
                     )
-                    sev = severities[int(idx) % len(severities)]
+                    sev = str(
+                        row.get("damage_severity")
+                        or row.get("building_damage_severity")
+                        or "no_damage"
+                    )
                     features.append(
                         {
                             "type": "Feature",
                             "geometry": mapping(geom),
                             "properties": {
-                                "building_id": f"bldg-{idx}",
-                                "building_type": str(row.get("building") or "yes"),
+                                "building_id": str(row.get("building_id") or f"bldg-{idx}"),
+                                "building_type": str(
+                                    row.get("building_type") or row.get("building") or "yes"
+                                ),
                                 "damage_severity": sev,
                                 "is_high_severity": sev in ("major_damage", "destroyed"),
+                                "grading_source": str(row.get("grading_source") or "muse-spark-1.3"),
+                                "visual_cue_summary": str(row.get("visual_cue_summary") or ""),
                                 "nearest_node": str(nearest_n),
                             },
                         }
@@ -476,6 +498,13 @@ class FirstLightState:
                         "gsd_m_per_px": round(
                             float(data.get("gsd_m_per_px", 0.2804)), 4
                         ),
+                        "sam_confidence": round(
+                            float(data.get("sam_confidence", 0.78)), 4
+                        ),
+                        "needs_drone_recon": bool(
+                            data.get("needs_drone_recon", False)
+                        ),
+                        "mask_source": str(data.get("mask_source", "sam-3.1")),
                         "clearance_reason": str(data.get("clearance_reason", "")),
                     },
                 }
@@ -856,7 +885,7 @@ async def post_incident_briefing(req: IncidentBriefingRequest) -> dict[str, Any]
     recs = rank_choke_point_clearance_roi(
         state.active_graph,
         vehicle_class=vc,
-        buildings_source=BUILDINGS_GEOJSON_PATH,
+        buildings_source=BUILDINGS_GRADED_GEOJSON_PATH if BUILDINGS_GRADED_GEOJSON_PATH.exists() else BUILDINGS_GEOJSON_PATH,
         max_recommendations=req.max_corridors,
     )
     rec_dicts = []
@@ -886,7 +915,7 @@ async def post_voice_dispatch(req: VoiceDispatchRequest) -> dict[str, Any]:
     recs = rank_choke_point_clearance_roi(
         state.active_graph,
         vehicle_class="fire_engine",
-        buildings_source=BUILDINGS_GEOJSON_PATH,
+        buildings_source=BUILDINGS_GRADED_GEOJSON_PATH if BUILDINGS_GRADED_GEOJSON_PATH.exists() else BUILDINGS_GEOJSON_PATH,
         max_recommendations=5,
     )
     top_edge_id: str | None = None
@@ -1249,7 +1278,7 @@ def get_clearance_roi(
         state.active_graph,
         origin_node=resolved_origin,
         vehicle_class=vc,
-        buildings_source=BUILDINGS_GEOJSON_PATH,
+        buildings_source=BUILDINGS_GRADED_GEOJSON_PATH if BUILDINGS_GRADED_GEOJSON_PATH.exists() else BUILDINGS_GEOJSON_PATH,
         max_recommendations=limit,
     )
     return {
@@ -1284,7 +1313,7 @@ def post_simulate_clear(req: SimulateClearRequest) -> dict[str, Any]:
     recommendations = rank_choke_point_clearance_roi(
         state.active_graph,
         vehicle_class=vc,
-        buildings_source=BUILDINGS_GEOJSON_PATH,
+        buildings_source=BUILDINGS_GRADED_GEOJSON_PATH if BUILDINGS_GRADED_GEOJSON_PATH.exists() else BUILDINGS_GEOJSON_PATH,
         max_recommendations=15,
     )
     return {

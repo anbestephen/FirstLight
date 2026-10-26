@@ -318,13 +318,14 @@ def load_annotated_routing_graph(
     roads_geojson_path: str | Path | None = "data/osm_roads.geojson",
     raster_path: str | Path | None = "data/noaa_michael_mexico_beach.tif",
     *,
-    simulate_if_no_masks: bool = True,
+    masks_geojson_path: str | Path | None = "data/sam31_mexico_beach_masks.geojson",
+    simulate_if_no_masks: bool = False,
 ) -> nx.MultiDiGraph:
     """
     Load the cached OpenStreetMap road graph (`data/osm_road_graph.graphml`), run
     cross-sectional clearance measurement via `src/geometry.py`, and annotate every
     graph edge with `min_clear_width_m`, `water_overlap_ratio`, `debris_area_sqm`,
-    and vehicle-specific edge weights.
+    `sam_confidence`, `needs_drone_recon`, and vehicle-specific edge weights.
     """
     G = ox.load_graphml(Path(graphml_path))
 
@@ -341,6 +342,7 @@ def load_annotated_routing_graph(
     _, clearances = evaluate_road_network_clearance(
         roads_source=edges_reset,
         raster_path=raster_path if (raster_path and Path(raster_path).exists()) else None,
+        masks_geojson_path=masks_geojson_path,
         simulate_if_no_masks=simulate_if_no_masks,
     )
 
@@ -370,6 +372,9 @@ def load_annotated_routing_graph(
             edge_data["water_area_m2"] = rec.water_area_m2
             edge_data["gsd_m_per_px"] = rec.gsd_m_per_px
             edge_data["bottleneck_lonlat"] = rec.bottleneck_point_lonlat
+            edge_data["sam_confidence"] = rec.sam_confidence
+            edge_data["needs_drone_recon"] = rec.needs_drone_recon
+            edge_data["mask_source"] = rec.mask_source
             edge_data["clearance_reason"] = rec.reason
 
     return annotate_graph_with_geometry_metrics(G)
@@ -705,14 +710,14 @@ def compute_multi_class_routes(
 
 def assign_buildings_to_graph_nodes(
     graph: nx.MultiDiGraph,
-    buildings_source: str | Path | gpd.GeoDataFrame | None = "data/osm_buildings.geojson",
+    buildings_source: str | Path | gpd.GeoDataFrame | None = "data/osm_buildings_graded.geojson",
 ) -> nx.MultiDiGraph:
     """
     Map high-severity damaged building structures onto their nearest road network nodes.
 
     If graph nodes already have `high_severity_buildings` populated, preserves them;
-    otherwise loads `data/osm_buildings.geojson` and deterministically assigns post-hurricane
-    high-severity structure counts to the nearest graph nodes.
+    otherwise loads `data/osm_buildings_graded.geojson` (real `muse-spark-1.3` graded footprints)
+    and assigns high-severity structure counts strictly from verified `damage_severity` grades.
     """
     G = graph.copy()
     existing_counts = sum(
@@ -730,6 +735,9 @@ def assign_buildings_to_graph_nodes(
 
     if isinstance(buildings_source, (str, Path)):
         b_path = Path(buildings_source)
+        graded_sibling = b_path.parent / "osm_buildings_graded.geojson"
+        if b_path.name == "osm_buildings.geojson" and graded_sibling.exists():
+            b_path = graded_sibling
         if not b_path.exists():
             return G
         buildings_gdf = gpd.read_file(b_path)
@@ -743,7 +751,7 @@ def assign_buildings_to_graph_nodes(
         buildings_gdf = buildings_gdf.set_crs(WGS84_CRS)
     buildings_wgs84 = buildings_gdf.to_crs(WGS84_CRS)
 
-    for idx, row in buildings_wgs84.iterrows():
+    for _, row in buildings_wgs84.iterrows():
         geom = row.geometry
         if geom is None or geom.is_empty:
             continue
@@ -751,15 +759,11 @@ def assign_buildings_to_graph_nodes(
         nearest_n = find_nearest_node(G, float(centroid.x), float(centroid.y))
         G.nodes[nearest_n]["total_buildings"] = int(G.nodes[nearest_n].get("total_buildings", 0)) + 1
 
-        # Check explicit severity attribute if present, else deterministic post-hurricane grading
         sev = row.get("damage_severity", row.get("building_damage_severity"))
-        if sev in ("major_damage", "destroyed") or row.get("is_high_severity") is True:
-            is_high = True
-        elif sev in ("no_damage", "minor_damage"):
-            is_high = False
-        else:
-            # Deterministic ~40% high-severity structural impact across Mexico Beach corridor
-            is_high = (int(idx) % 5) in (0, 2)
+        is_high = bool(
+            sev in ("major_damage", "destroyed")
+            or row.get("is_high_severity") is True
+        )
 
         if is_high:
             G.nodes[nearest_n]["high_severity_buildings"] = (
@@ -774,7 +778,7 @@ def rank_choke_point_clearance_roi(
     *,
     origin_node: int | str | None = None,
     vehicle_class: str | VehicleClass = VehicleClass.FIRE_ENGINE,
-    buildings_source: str | Path | gpd.GeoDataFrame | None = "data/osm_buildings.geojson",
+    buildings_source: str | Path | gpd.GeoDataFrame | None = "data/osm_buildings_graded.geojson",
     max_recommendations: int | None = None,
 ) -> list[ChokePointROIRecommendation]:
     """

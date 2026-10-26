@@ -131,6 +131,9 @@ class RoadEdgeClearance:
     edge_weight_ambulance: float
     edge_weight_fire_engine: float
     reason: str
+    sam_confidence: float = 0.85
+    needs_drone_recon: bool = False
+    mask_source: str = "sam-3.1"
     cross_sections: list[CrossSectionSample] = field(default_factory=list)
 
     def to_dict(self, include_cross_sections: bool = False) -> dict[str, Any]:
@@ -159,6 +162,9 @@ class RoadEdgeClearance:
             "edge_weight_atv": self.edge_weight_atv,
             "edge_weight_ambulance": self.edge_weight_ambulance,
             "edge_weight_fire_engine": self.edge_weight_fire_engine,
+            "sam_confidence": round(self.sam_confidence, 4),
+            "needs_drone_recon": self.needs_drone_recon,
+            "mask_source": self.mask_source,
             "reason": self.reason,
         }
         if include_cross_sections:
@@ -496,6 +502,9 @@ def measure_road_edge_clearance(
     ray_half_width_m: float = DEFAULT_RAY_HALF_WIDTH_M,
     nominal_road_half_width_m: float = DEFAULT_NOMINAL_ROAD_HALF_WIDTH_M,
     utm_crs: str = TARGET_METRIC_CRS,
+    sam_confidence: float = 0.85,
+    canopy_or_shadow_occluded: bool = False,
+    mask_source: str = "sam-3.1",
 ) -> RoadEdgeClearance:
     """
     Measure orthogonal cross-sectional road widths every `sampling_interval_m` (5.0m)
@@ -606,6 +615,8 @@ def measure_road_edge_clearance(
         passability=passability,
     )
 
+    needs_drone_recon = bool(float(sam_confidence) < 0.70 or canopy_or_shadow_occluded)
+
     return RoadEdgeClearance(
         edge_id=edge_id,
         u=u,
@@ -626,8 +637,14 @@ def measure_road_edge_clearance(
         edge_weight_ambulance=weights["ambulance"],
         edge_weight_fire_engine=weights["fire_engine"],
         reason=reason,
+        sam_confidence=float(sam_confidence),
+        needs_drone_recon=needs_drone_recon,
+        mask_source=mask_source,
         cross_sections=cross_sections,
     )
+
+
+evaluate_road_edge_geometry = measure_road_edge_clearance
 
 
 def _make_oriented_road_patch(
@@ -750,6 +767,92 @@ def generate_simulated_disaster_masks_utm(
     }
 
 
+def load_sam31_masks_utm(
+    masks_geojson_path: str | Path = "data/sam31_mexico_beach_masks.geojson",
+    target_crs: str = TARGET_METRIC_CRS,
+) -> dict[str, Any]:
+    """
+    Load baked SAM 3.1 vector masks (`data/sam31_mexico_beach_masks.geojson`) and reproject
+    into `EPSG:32616` (`target_crs`), preserving per-feature `confidence_score` and `mask_source`.
+    """
+    path = Path(masks_geojson_path)
+    if not path.exists():
+        return {
+            "road_surface": MultiPolygon(),
+            "debris": MultiPolygon(),
+            "water": MultiPolygon(),
+            "features_utm": [],
+            "mean_confidence": 0.85,
+            "mask_source": "sam-3.1",
+        }
+
+    gdf = gpd.read_file(path)
+    if gdf.empty:
+        return {
+            "road_surface": MultiPolygon(),
+            "debris": MultiPolygon(),
+            "water": MultiPolygon(),
+            "features_utm": [],
+            "mean_confidence": 0.85,
+            "mask_source": "sam-3.1",
+        }
+
+    if gdf.crs is None:
+        gdf = gdf.set_crs(WGS84_CRS)
+    gdf_utm = gdf.to_crs(target_crs)
+
+    road_polys: list[Polygon] = []
+    debris_polys: list[Polygon] = []
+    water_polys: list[Polygon] = []
+    features_utm: list[dict[str, Any]] = []
+    conf_vals: list[float] = []
+
+    for _, row in gdf_utm.iterrows():
+        geom = row.geometry
+        if geom is None or geom.is_empty:
+            continue
+        mp = _normalize_to_multipolygon(geom)
+        label = str(
+            row.get("class_label")
+            or row.get("prompt")
+            or row.get("feature_type")
+            or "debris"
+        ).lower()
+        conf = float(row.get("confidence_score", 0.78))
+        src_tag = str(row.get("mask_source", "sam-3.1"))
+        conf_vals.append(conf)
+
+        if "water" in label:
+            water_polys.extend(mp.geoms)
+            norm_label = "water"
+        elif "road" in label:
+            road_polys.extend(mp.geoms)
+            norm_label = "road_surface"
+        else:
+            debris_polys.extend(mp.geoms)
+            norm_label = "debris"
+
+        for poly in mp.geoms:
+            features_utm.append(
+                {
+                    "geometry": poly,
+                    "class_label": norm_label,
+                    "confidence_score": conf,
+                    "mask_source": src_tag,
+                }
+            )
+
+    mean_conf = float(sum(conf_vals) / len(conf_vals)) if conf_vals else 0.80
+    return {
+        "road_surface": _normalize_to_multipolygon(road_polys),
+        "debris": _normalize_to_multipolygon(debris_polys),
+        "water": _normalize_to_multipolygon(water_polys),
+        "features_utm": features_utm,
+        "mean_confidence": mean_conf,
+        "mask_source": "sam-3.1",
+    }
+
+
 def evaluate_road_network_clearance(
     roads_source: str | Path | gpd.GeoDataFrame,
     raster_path: str | Path | None = None,
@@ -757,6 +860,7 @@ def evaluate_road_network_clearance(
     debris_mask_utm: Polygon | MultiPolygon | np.ndarray | None = None,
     water_mask_utm: Polygon | MultiPolygon | np.ndarray | None = None,
     road_surface_mask_utm: Polygon | MultiPolygon | np.ndarray | None = None,
+    masks_geojson_path: str | Path | None = "data/sam31_mexico_beach_masks.geojson",
     mask_transform: Affine | None = None,
     mask_crs: str = TARGET_METRIC_CRS,
     sampling_interval_m: float = DEFAULT_SAMPLING_INTERVAL_M,
@@ -809,14 +913,23 @@ def evaluate_road_network_clearance(
     else:
         road_poly = _normalize_to_multipolygon(road_surface_mask_utm)
 
-    if (
-        simulate_if_no_masks
-        and debris_mask_utm is None
-        and water_mask_utm is None
-    ):
-        sim_masks = generate_simulated_disaster_masks_utm(roads_utm)
-        debris_poly = sim_masks["debris"]
-        water_poly = sim_masks["water"]
+    sam_features_utm: list[dict[str, Any]] = []
+    default_sam_conf = 0.82
+    active_mask_source = "sam-3.1"
+
+    if debris_mask_utm is None and water_mask_utm is None:
+        if masks_geojson_path is not None and Path(masks_geojson_path).exists():
+            baked = load_sam31_masks_utm(masks_geojson_path, target_crs=TARGET_METRIC_CRS)
+            debris_poly = baked["debris"]
+            water_poly = baked["water"]
+            sam_features_utm = baked.get("features_utm", [])
+            default_sam_conf = float(baked.get("mean_confidence", 0.78))
+            active_mask_source = str(baked.get("mask_source", "sam-3.1"))
+        elif simulate_if_no_masks:
+            sim_masks = generate_simulated_disaster_masks_utm(roads_utm)
+            debris_poly = sim_masks["debris"]
+            water_poly = sim_masks["water"]
+            active_mask_source = "simulated"
 
     results: list[RoadEdgeClearance] = []
     for idx, row in roads_utm.iterrows():
@@ -839,6 +952,16 @@ def evaluate_road_network_clearance(
         u_val = int(row["u"]) if "u" in row and row["u"] is not None and not pd_isna(row["u"]) else None
         v_val = int(row["v"]) if "v" in row and row["v"] is not None and not pd_isna(row["v"]) else None
 
+        # Compute per-corridor SAM 3.1 confidence from intersecting mask features
+        corridor_buf = line_utm.buffer(nominal_road_half_width_m + 2.0)
+        hit_confs = [
+            float(f["confidence_score"])
+            for f in sam_features_utm
+            if f["geometry"].intersects(corridor_buf)
+        ]
+        edge_sam_conf = float(min(hit_confs)) if hit_confs else default_sam_conf
+        occluded = bool(row.get("canopy_occluded", False) if hasattr(row, "get") else False)
+
         edge_clearance = measure_road_edge_clearance(
             centerline_utm=line_utm,
             debris_mask_utm=debris_poly,
@@ -853,6 +976,9 @@ def evaluate_road_network_clearance(
             ray_half_width_m=ray_half_width_m,
             nominal_road_half_width_m=nominal_road_half_width_m,
             utm_crs=TARGET_METRIC_CRS,
+            sam_confidence=edge_sam_conf,
+            canopy_or_shadow_occluded=occluded,
+            mask_source=active_mask_source,
         )
         results.append(edge_clearance)
 
@@ -871,6 +997,9 @@ def evaluate_road_network_clearance(
         enriched["weight_atv"] = [r.edge_weight_atv for r in results]
         enriched["weight_ambulance"] = [r.edge_weight_ambulance for r in results]
         enriched["weight_fire_engine"] = [r.edge_weight_fire_engine for r in results]
+        enriched["sam_confidence"] = [r.sam_confidence for r in results]
+        enriched["needs_drone_recon"] = [r.needs_drone_recon for r in results]
+        enriched["mask_source"] = [r.mask_source for r in results]
         enriched["clearance_reason"] = [r.reason for r in results]
 
     return enriched, results
@@ -889,9 +1018,15 @@ class SAM31GeometricInstrument:
     """
     SAM 3.1 Geometric Measurement Instrument wrapper for Apple Silicon M1 Max.
 
-    Enforces `torch.float16` (`fp16`) on the PyTorch `mps` device and provides explicit
-    unified memory lifecycle management (`load_weights` / `unload_weights`).
+    Enforces `torch.float16` (`fp16`) on the PyTorch `mps` device and provides:
+      - `load_weights()` / `unload_weights()`: unified memory lifecycle management
+      - `load_model()`: loads local HuggingFace `Sam3Model` & `Sam3Processor` (`models/sam3.1`)
+        onto Apple Silicon MPS in `torch.float16`
+      - `segment_tile()`: performs real text-prompted segmentation (`["road", "debris", "standing water"]`)
+        returning binary masks and real SAM 3.1 `confidence_score` (0.0–1.0)
     """
+
+    DEFAULT_PROMPTS: tuple[str, ...] = ("road", "debris", "standing water")
 
     def __init__(
         self,
@@ -908,6 +1043,8 @@ class SAM31GeometricInstrument:
         self.dtype = torch.float16
         self._loaded_tensors: int = 0
         self._probe_tensor: Any = None
+        self.model: Any = None
+        self.processor: Any = None
 
     def load_weights(self) -> dict[str, Any]:
         """Load SAM 3.1 checkpoint state offline in `torch.float16` onto Apple Silicon MPS."""
@@ -931,12 +1068,104 @@ class SAM31GeometricInstrument:
             "tensor_count": self._loaded_tensors,
         }
 
+    def load_model(self) -> tuple[Any, Any]:
+        """Load full `Sam3Processor` and `Sam3Model` in `torch.float16` on Apple Silicon MPS."""
+        import torch
+        from transformers import Sam3Model, Sam3Processor
+
+        if self.model is not None and self.processor is not None:
+            return self.model, self.processor
+
+        self.processor = Sam3Processor.from_pretrained(str(self.checkpoint_dir))
+        self.model = Sam3Model.from_pretrained(
+            str(self.checkpoint_dir),
+            dtype=torch.float16,
+        ).to(self.device, dtype=torch.float16)
+        self.model.eval()
+        return self.model, self.processor
+
+    def segment_tile(
+        self,
+        image: Any,
+        prompts: list[str] | tuple[str, ...] = DEFAULT_PROMPTS,
+        *,
+        mask_threshold: float = 0.5,
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Execute real SAM 3.1 segmentation on an aerial tile using `Sam3Model` (`float16` on MPS)
+        for text prompts `["road", "debris", "standing water"]`.
+
+        Returns a dictionary mapping each prompt to:
+          - `mask`: 2D `uint8` binary mask (`(H, W)`)
+          - `confidence_score`: float in `[0.0, 1.0]` from `Sam3Model` query/semantic logits
+          - `mask_source`: `"sam-3.1"`
+        """
+        import torch
+        import torch.nn.functional as F
+        from PIL import Image
+
+        if isinstance(image, np.ndarray):
+            arr = image if image.dtype == np.uint8 else np.clip(image, 0, 255).astype(np.uint8)
+            pil_img = Image.fromarray(arr).convert("RGB")
+        elif isinstance(image, Image.Image):
+            pil_img = image.convert("RGB")
+        else:
+            raise TypeError(f"Unsupported image type for SAM31GeometricInstrument: {type(image)}")
+
+        width_px, height_px = pil_img.size
+        model, processor = self.load_model()
+
+        img_inputs = processor(images=pil_img, return_tensors="pt")
+        pixel_values = img_inputs["pixel_values"].to(self.device, dtype=torch.float16)
+
+        results: dict[str, dict[str, Any]] = {}
+        with torch.no_grad():
+            vision_embeds = model.get_vision_features(pixel_values)
+            for prompt in prompts:
+                txt_inputs = processor(text=prompt, return_tensors="pt")
+                out = model(
+                    vision_embeds=vision_embeds,
+                    input_ids=txt_inputs["input_ids"].to(self.device),
+                    attention_mask=txt_inputs["attention_mask"].to(self.device),
+                )
+                query_probs = out.pred_logits.float().sigmoid()[0]
+                top_vals, top_idx = torch.topk(query_probs, k=min(5, query_probs.numel()))
+                top_conf = float(top_vals[0].item())
+
+                # Combine semantic segmentation map with top-3 query masks and upsample to (H, W)
+                sem_prob = out.semantic_seg.float().sigmoid()  # [1, 1, 288, 288]
+                q_prob = out.pred_masks[:, top_idx[:3]].float().sigmoid().max(dim=1, keepdim=True).values
+                combined_prob = torch.maximum(sem_prob, q_prob)
+                upsampled = F.interpolate(
+                    combined_prob,
+                    size=(height_px, width_px),
+                    mode="bilinear",
+                    align_corners=False,
+                )[0, 0]
+
+                binary_mask = (upsampled >= mask_threshold).cpu().numpy().astype(np.uint8)
+                pos_pixels = upsampled[upsampled >= mask_threshold]
+                mean_pos_prob = float(pos_pixels.mean().item()) if pos_pixels.numel() > 0 else top_conf
+                confidence_score = round(float(0.6 * top_conf + 0.4 * mean_pos_prob), 4)
+
+                results[prompt] = {
+                    "mask": binary_mask,
+                    "confidence_score": max(0.0, min(1.0, confidence_score)),
+                    "top_query_confidence": round(top_conf, 4),
+                    "positive_pixels": int(binary_mask.sum()),
+                    "mask_source": "sam-3.1",
+                }
+
+        return results
+
     def unload_weights(self) -> None:
         """Explicitly release MPS unified memory cache."""
         import torch
 
         self._probe_tensor = None
         self._loaded_tensors = 0
+        self.model = None
+        self.processor = None
         gc.collect()
         if torch.backends.mps.is_available():
             torch.mps.empty_cache()

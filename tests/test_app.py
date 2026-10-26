@@ -30,7 +30,7 @@ def test_health_endpoint_reports_tiers_and_mps_mlx_health() -> None:
     assert data["offline_ready"] is True
     assert "vlm_tiers" in data
     assert data["vlm_tiers"]["tier_3_deterministic_ready"] is True
-    assert data["vlm_tiers"]["tier_1_timeout_s"] == 2.5
+    assert data["vlm_tiers"]["tier_1_timeout_s"] == 15.0
 
     assert "device_health" in data
     assert data["device_health"]["enforced_precision"] == "float16 / 4-bit"
@@ -57,9 +57,15 @@ def test_layers_endpoint_returns_cached_geojson_and_envelope() -> None:
     assert "passable_atv" in sample_road_props
     assert "passable_ambulance" in sample_road_props
     assert "passable_fire_engine" in sample_road_props
+    assert sample_road_props["mask_source"] == "sam-3.1"
+    assert 0.0 <= sample_road_props["sam_confidence"] <= 1.0
+    assert isinstance(sample_road_props["needs_drone_recon"], bool)
 
     assert data["buildings"]["type"] == "FeatureCollection"
     assert len(data["buildings"]["features"]) == 334
+    sample_bldg_props = data["buildings"]["features"][0]["properties"]
+    assert sample_bldg_props["grading_source"] == "muse-spark-1.3"
+    assert "[MUSE-SPARK-1.3 CLOUD VLM]" in sample_bldg_props["visual_cue_summary"]
 
     assert data["raster_envelope"]["type"] == "Feature"
     assert data["raster_envelope"]["geometry"]["type"] == "Polygon"
