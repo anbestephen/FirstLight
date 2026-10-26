@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>FirstLight — Offline Tactical Disaster Routing &amp; Clearance ROI</title>
+  <link rel="stylesheet" href="/vendor/leaflet.css" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <!-- Top Tactical Status Bar -->
+  <header class="top-hud">
+    <div class="brand-block">
+      <div class="brand-logo" aria-hidden="true">FL</div>
+      <div>
+        <h1 class="brand-title">FirstLight <span class="brand-sub">SAM 3.1 Geometric Routing</span></h1>
+        <div class="aoi-subtitle" id="aoi-label">AOI: Mexico Beach, FL (US Hwy 98 — Hurricane Michael)</div>
+      </div>
+    </div>
+
+    <!-- Vehicle Class Selector Toggle -->
+    <div class="vehicle-selector" role="tablist" aria-label="Vehicle Class Selector">
+      <button type="button" class="vehicle-btn" data-vehicle="atv" id="btn-vehicle-atv">
+        <span class="v-name">ATV / Foot</span>
+        <span class="v-thresh">&ge; 1.2m</span>
+      </button>
+      <button type="button" class="vehicle-btn" data-vehicle="ambulance" id="btn-vehicle-ambulance">
+        <span class="v-name">Ambulance</span>
+        <span class="v-thresh">&ge; 2.2m</span>
+      </button>
+      <button type="button" class="vehicle-btn active" data-vehicle="fire_engine" id="btn-vehicle-fire_engine">
+        <span class="v-name">Fire Engine</span>
+        <span class="v-thresh">&ge; 3.5m</span>
+      </button>
+    </div>
+
+    <!-- Connectivity & Hardware Badges -->
+    <div class="status-pills">
+      <div class="pill pill-net" id="network-status-pill" title="100% Local Wi-Fi / Air-Gapped Ready">
+        <span class="status-dot online"></span>
+        <span id="network-status-text">LOCAL WI-FI READY</span>
+      </div>
+      <div class="pill pill-tier" id="vlm-tier-badge" title="Active 3-Tier VLM Circuit Breaker State">
+        TIER 3: DETERMINISTIC
+      </div>
+      <div class="pill pill-hw" id="hw-status-badge" title="Apple Silicon M1 Max Precision &amp; GSD">
+        MPS fp16 &bull; 0.2804 m/px
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Responsive Workspace -->
+  <main class="workspace">
+    <!-- Map Viewport -->
+    <section class="map-section">
+      <div id="map" class="map-canvas" aria-label="Mexico Beach Tactical Map"></div>
+
+      <!-- Floating Map Controls & Legend -->
+      <div class="map-overlay-bar">
+        <div class="legend-group">
+          <span class="legend-item"><i class="swatch swatch-passable"></i>Passable</span>
+          <span class="legend-item"><i class="swatch swatch-debris"></i>Debris Bottleneck</span>
+          <span class="legend-item"><i class="swatch swatch-water"></i>Water (Weight=&infin;)</span>
+          <span class="legend-item"><i class="swatch swatch-route"></i>Active Route</span>
+        </div>
+        <div class="map-actions">
+          <label class="toggle-label">
+            <input type="checkbox" id="toggle-raster" checked />
+            <span>NOAA Imagery</span>
+          </label>
+          <label class="toggle-label">
+            <input type="checkbox" id="toggle-buildings" checked />
+            <span>Buildings</span>
+          </label>
+          <button type="button" class="action-btn" id="btn-pick-origin" title="Tap map to set route origin">
+            Set Origin
+          </button>
+          <button type="button" class="action-btn" id="btn-pick-dest" title="Tap map to set route destination">
+            Set Dest
+          </button>
+          <button type="button" class="action-btn btn-reset" id="btn-reset-sim" title="Reset simulated debris clearances">
+            Reset Sim (<span id="cleared-count">0</span>)
+          </button>
+        </div>
+      </div>
+
+      <!-- Active Route Telemetry Banner -->
+      <div class="route-banner" id="route-banner">
+        <div class="route-metrics">
+          <div class="metric-box">
+            <span class="metric-label">ACTIVE CLASS</span>
+            <span class="metric-val" id="route-class-label">Fire Engine (&ge;3.5m)</span>
+          </div>
+          <div class="metric-box">
+            <span class="metric-label">STATUS</span>
+            <span class="metric-val" id="route-status-val">Computing...</span>
+          </div>
+          <div class="metric-box">
+            <span class="metric-label">DISTANCE</span>
+            <span class="metric-val" id="route-distance-val">-- m</span>
+          </div>
+          <div class="metric-box">
+            <span class="metric-label">EST. TRANSIT</span>
+            <span class="metric-val" id="route-eta-val">-- s</span>
+          </div>
+          <div class="metric-box">
+            <span class="metric-label">DETOURS</span>
+            <span class="metric-val" id="route-detours-val">0</span>
+          </div>
+        </div>
+        <div class="route-rationale" id="route-rationale-text">
+          Initializing Mexico Beach OSM road graph and SAM 3.1 cross-sectional measurements...
+        </div>
+        <div class="multi-class-mini" id="multi-class-comparison"></div>
+      </div>
+    </section>
+
+    <!-- Side Panel / Mobile Bottom Drawer: Choke-Point Clearance ROI & VLM Inspector -->
+    <aside class="side-panel">
+      <!-- Panel Tabs -->
+      <div class="panel-tabs">
+        <button type="button" class="panel-tab active" data-tab="roi" id="tab-btn-roi">
+          Choke-Point Clearance ROI
+        </button>
+        <button type="button" class="panel-tab" data-tab="steps" id="tab-btn-steps">
+          Turn-by-Turn (<span id="steps-count">0</span>)
+        </button>
+        <button type="button" class="panel-tab" data-tab="assess" id="tab-btn-assess">
+          3-Tier VLM Triage
+        </button>
+      </div>
+
+      <!-- Tab 1: Choke-Point Clearance ROI Priority Queue -->
+      <div class="tab-content active" id="tab-roi">
+        <div class="panel-header-note">
+          Ranked strictly by <strong>Structures Unlocked / m&sup2; Debris Cleared</strong>.
+          Tap <em>Simulate Clearance</em> to widen a bottleneck and re-route traffic in real time.
+        </div>
+        <div class="roi-list" id="roi-queue-list"></div>
+      </div>
+
+      <!-- Tab 2: Turn-by-Turn Route Edge Passability Steps -->
+      <div class="tab-content" id="tab-steps">
+        <div class="panel-header-note">
+          Orthogonal 5m cross-section clearance telemetry along the active route.
+        </div>
+        <div class="steps-list" id="route-steps-list"></div>
+      </div>
+
+      <!-- Tab 3: 3-Tier VLM Damage Grading & Circuit Breaker Inspector -->
+      <div class="tab-content" id="tab-assess">
+        <div class="panel-header-note">
+          Inspect any road bottleneck or building cluster through the 3-Tier VLM Failover Router.
+        </div>
+        <div class="vlm-controls">
+          <label for="select-failover-mode">Circuit Breaker Mode:</label>
+          <select id="select-failover-mode" class="mode-select">
+            <option value="auto">AUTO (Tier 1 Cloud &rarr; Tier 2 MLX &rarr; Tier 3 Geom)</option>
+            <option value="force_deterministic">FORCE TIER 3 (Deterministic Geometry)</option>
+            <option value="force_mlx">FORCE TIER 2 (Local Apple Silicon MLX 4-bit)</option>
+            <option value="force_cloud">FORCE TIER 1 (Cloud Meta API 2.5s timeout)</option>
+          </select>
+          <button type="button" class="action-btn btn-primary" id="btn-run-assess">
+            Run Damage Assessment
+          </button>
+        </div>
+        <div class="assess-card" id="assess-result-box">
+          Tap a bottleneck card or road segment on the map, or click "Run Damage Assessment" to evaluate.
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <script src="/vendor/leaflet.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
