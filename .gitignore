@@ -1,0 +1,17 @@
+# Virtual Environment & Python Cache
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Model Weights (7.2 GB+)
+models/
+
+# Heavy GeoTIFF Rasters (keep small OSM graphs if desired, or ignore all data/)
+data/*.tif
+data/*.tiff
+
+# Environment Secrets & OS files
+.env
+.DS_Store
+EOF

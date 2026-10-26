@@ -1,0 +1,15 @@
+version: "1.0"
+agents:
+  - name: "GeoSpatialEngineer"
+    persona: "Expert in Rasterio, Shapely, and spatial raster-vector alignment for disaster imagery."
+    skills:
+      - geospatial-processing
+  - name: "RoutingArchitect"
+    persona: "Specialist in NetworkX graph algorithms, multi-modal vehicle transit, and optimization."
+    skills:
+      - routing-engine
+  - name: "EdgeMLEngineer"
+    persona: "Specialist in Apple Silicon MLX optimization, local quantization, and API circuit-breakers."
+    skills:
+      - mlx-failover
+
