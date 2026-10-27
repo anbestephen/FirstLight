@@ -235,9 +235,12 @@
     aiPill.textContent = onEdge ? "AI: On-device Llama" : "AI: Meta Cloud";
     aiPill.classList.toggle("ai-edge", onEdge);
     aiPill.classList.toggle("ai-cloud", !onEdge);
-    document
-      .getElementById("uplink-banner")
-      .classList.toggle("hidden", !(conn.uplink_online === false || conn.force_offline));
+    const banner = document.getElementById("uplink-banner");
+    const uplinkLost = conn.uplink_online === false;
+    banner.classList.toggle("hidden", !(uplinkLost || conn.force_offline));
+    banner.textContent = uplinkLost
+      ? "Internet lost — still live over local Wi-Fi. AI now runs on the command laptop."
+      : "Comms blackout (simulated by command) — AI now runs on the command laptop.";
   }
 
   function showToast(message) {
