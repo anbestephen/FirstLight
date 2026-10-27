@@ -1410,3 +1410,8 @@ path.pinch-pulse {
 .agent-verify.bad {
   color: var(--accent-red);
 }
+
+.agent-panel.hidden,
+.caliper-scan-readout.hidden {
+  display: none;
+}
