@@ -1003,8 +1003,28 @@
         bannerEl.classList.remove("hidden");
       }
       renderBuildingsLayer();
+      await refreshActiveCaliper();
     } else if (state.activeEdgeId) {
       await inspectCorridorByEdgeId(state.activeEdgeId, false);
+    }
+  }
+
+  /**
+   * Re-read the selected corridor's caliper after a simulated clearance so the gauge, pinch
+   * span and verdict show the restored width (no new VLM grading call).
+   */
+  async function refreshActiveCaliper() {
+    if (!state.activeEdgeId) return;
+    const res = await fetch(`/api/choke-point/${encodeURIComponent(state.activeEdgeId)}/caliper`);
+    if (!res.ok) return;
+    const caliperGeojson = await res.json();
+    state.lastCaliperGeojson = caliperGeojson;
+    const props = caliperGeojson.properties || {};
+    renderCaliperLayer(caliperGeojson, false, false);
+    updateCaliperThresholdGauge(props.min_clear_width_m, Boolean(props.has_water_obstruction));
+    document.getElementById("inspector-rationale-text").textContent = props.reason || "";
+    if (props.simulated_clearance) {
+      showCaliperScanReadout(`${caliperVerdictText(props)} <span class="scan-label">simulated clearance</span>`, true);
     }
   }
 

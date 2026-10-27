@@ -1127,6 +1127,7 @@ def get_choke_point_caliper(edge_id: str) -> dict[str, Any]:
             name=road_name,
             gsd_m_per_px=gsd_m_per_px,
             simulated_clearance=is_cleared,
+            restored_width_m=float(edata.get("nominal_width_m", 8.0)) if is_cleared else None,
         )
         state.meta_suite.record_model_invocation("sam-3.1", 0.0, "baked_mps_fp16")
         return caliper_fc

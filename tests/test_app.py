@@ -487,3 +487,20 @@ def test_phase3_ground_truth_benchmark_and_drone_recon_confidence() -> None:
 
 
 
+
+
+def test_caliper_reports_restored_width_after_simulated_clearance() -> None:
+    roi = client.get("/api/clearance-roi?vehicle_class=fire_engine&limit=1").json()["recommendations"]
+    if not roi:
+        pytest.skip("no debris choke points")
+    top = roi[0]
+    before = client.get(f"/api/choke-point/{top['edge_id']}/caliper").json()["properties"]
+    client.post("/api/simulate-clear", json={"edge_u": top["edge_u"], "edge_v": top["edge_v"], "edge_key": top["edge_key"]})
+    try:
+        after = client.get(f"/api/choke-point/{top['edge_id']}/caliper").json()["properties"]
+        assert after["simulated_clearance"] is True
+        assert after["min_clear_width_m"] == pytest.approx(top["restored_clear_width_m"], abs=0.01)
+        assert after["min_clear_width_m"] > before["min_clear_width_m"]
+        assert after["reason"].startswith("Simulated debris clearance")
+    finally:
+        client.post("/api/simulate-clear", json={"reset": True})

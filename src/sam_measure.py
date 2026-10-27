@@ -386,6 +386,7 @@ def build_caliper_geojson_from_measurement(
     name: str,
     gsd_m_per_px: float,
     simulated_clearance: bool = False,
+    restored_width_m: float | None = None,
     utm_crs: str = "EPSG:32616",
 ) -> dict[str, Any]:
     """
@@ -457,6 +458,14 @@ def build_caliper_geojson_from_measurement(
     widths = [float(st["clear_width_m"]) for st in record["stations"]] or [0.0]
     min_w = float(record["min_clear_width_m"])
     has_water = bool(record["has_water_obstruction"])
+    reason = record.get("reason", "")
+    if simulated_clearance and restored_width_m is not None and not has_water:
+        # The rays stay as measured (what SAM saw); the edge reports the simulated restored width.
+        reason = (
+            f"Simulated debris clearance: width restored to {restored_width_m:.2f} m "
+            f"(SAM 3.1 measured {min_w:.2f} m before clearing)."
+        )
+        min_w = float(restored_width_m)
     return {
         "type": "FeatureCollection",
         "properties": {
@@ -480,7 +489,7 @@ def build_caliper_geojson_from_measurement(
             "sam_confidence": record["sam_confidence"],
             "needs_drone_recon": record["needs_drone_recon"],
             "mask_source": "sam-3.1",
-            "reason": record.get("reason", ""),
+            "reason": reason,
             "ray_count": len(record["stations"]),
             "simulated_clearance": simulated_clearance,
         },
