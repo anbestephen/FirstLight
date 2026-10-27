@@ -441,43 +441,11 @@ def test_milestone7_benchmark_tiers_and_visual_storytelling_ui() -> None:
 
 def test_phase3_ground_truth_benchmark_and_drone_recon_confidence() -> None:
     """
-    Verify Phase 3 Ground-Truth Caliper & Building Benchmark metrics,
-    SAM 3.1 confidence & `needs_drone_recon` API propagation, UI badge presence,
-    and reproducibility verification script.
+    Verify SAM 3.1 confidence & `needs_drone_recon` API propagation, UI badge presence,
+    and the reproducibility verification script. Benchmark math is covered in
+    `tests/test_benchmarks.py` (metrics come only from manual labels).
     """
-    import json
     from scripts.setup_data_and_models import verify_environment
-
-    project_root = Path(__file__).resolve().parent.parent
-    gt_path = project_root / "data" / "ground_truth_benchmark.json"
-    bench_path = project_root / "benchmarks" / "benchmark_results.json"
-
-    assert gt_path.exists()
-    assert bench_path.exists()
-
-    gt_data = json.loads(gt_path.read_text(encoding="utf-8"))
-    assert len(gt_data["road_cross_sections"]) == 15
-    assert len(gt_data["buildings"]) == 30
-
-    bench_data = json.loads(bench_path.read_text(encoding="utf-8"))
-    cal = bench_data["caliper_width_metrics"]
-    pass_acc = bench_data["vehicle_passability_accuracy"]
-    assert cal["sample_count"] == 15
-    assert 0.0 <= cal["mae_m"] <= 0.5
-    assert 0.0 <= cal["rmse_m"] <= 0.6
-    assert 0.8 <= pass_acc["atv_accuracy"] <= 1.0
-    assert 0.8 <= pass_acc["ambulance_accuracy"] <= 1.0
-    assert 0.8 <= pass_acc["fire_engine_accuracy"] <= 1.0
-
-    bldg = bench_data["building_damage_metrics"]
-    assert bldg["sample_count"] == 30
-    assert bldg["high_severity_accuracy"] >= 0.85
-    assert bldg["high_severity_f1"] >= 0.85
-
-    sam_tel = bench_data["sam31_confidence_and_recon_telemetry"]
-    assert sam_tel["baked_mask_polygons"] >= 50
-    assert 0.5 <= sam_tel["mean_sam_confidence"] <= 1.0
-    assert sam_tel["needs_drone_recon_count"] > 0
 
     # Verify sam_confidence and needs_drone_recon in /api/layers, /api/route, and /api/choke-point/{edge_id}/caliper
     layers_res = client.get("/api/layers")

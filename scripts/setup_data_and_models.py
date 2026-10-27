@@ -57,7 +57,7 @@ def verify_environment() -> tuple[bool, list[dict]]:
             10_000,
         ),
         (
-            "Baked SAM 3.1 Obstacle Masks (147 polygons, sam-3.1)",
+            "Baked SAM 3.1 Pavement/Debris/Water Masks (sam-3.1)",
             DATA_DIR / "sam31_mexico_beach_masks.geojson",
             5_000,
         ),
@@ -67,14 +67,14 @@ def verify_environment() -> tuple[bool, list[dict]]:
             20_000,
         ),
         (
-            "Ground-Truth Reference Benchmark (15 roads, 30 buildings)",
-            DATA_DIR / "ground_truth_benchmark.json",
-            1_000,
+            "Baked SAM 3.1 Road Measurements (158 roads)",
+            DATA_DIR / "sam31_edge_measurements.json",
+            100_000,
         ),
         (
-            "Executed Ground-Truth Evaluation Metrics",
-            BENCHMARKS_DIR / "benchmark_results.json",
-            500,
+            "Held-out Benchmark Samples (40 roads, 40 buildings)",
+            DATA_DIR / "ground_truth" / "road_width_samples.json",
+            1_000,
         ),
         (
             "Meta SAM 3.1 Local Weights (model.safetensors)",

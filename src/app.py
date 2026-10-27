@@ -50,6 +50,7 @@ from src.geometry import (
     load_and_align_roads,
     load_sam31_masks_utm,
 )
+from src.labeling import router as labeling_router
 from src.routing import (
     VEHICLE_MIN_WIDTH_M,
     _format_edge_name,
@@ -686,6 +687,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(labeling_router)
+
 if VENDOR_DIR.exists():
     app.mount("/vendor", StaticFiles(directory=str(VENDOR_DIR)), name="vendor")
 if UI_DIR.exists():
@@ -732,6 +735,14 @@ def serve_dashboard_css() -> FileResponse:
     if not css_path.exists():
         raise HTTPException(status_code=404, detail="ui/style.css not found")
     return FileResponse(css_path, media_type="text/css")
+
+
+@app.get("/label", include_in_schema=False)
+def serve_labeling_view() -> FileResponse:
+    label_path = UI_DIR / "label.html"
+    if not label_path.exists():
+        raise HTTPException(status_code=404, detail="ui/label.html not found")
+    return FileResponse(label_path, media_type="text/html")
 
 
 @app.get("/field", include_in_schema=False)

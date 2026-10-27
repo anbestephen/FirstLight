@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FirstLight Ground Truth Labelling</title>
+  <style>
+    :root {
+      --bg: #0b1120; --panel: #111827; --card: #1e293b; --line: #334155;
+      --text: #f8fafc; --muted: #94a3b8; --blue: #38bdf8; --green: #10b981;
+      --amber: #f59e0b; --red: #ef4444; --yellow: #facc15;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: var(--sans); min-height: 100vh; }
+    header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+    header h1 { font-size: 17px; }
+    .tabs { display: flex; gap: 6px; }
+    .tab { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; font-weight: 600; }
+    .tab.active { background: var(--blue); color: #04222f; border-color: var(--blue); }
+    .muted { color: var(--muted); font-size: 13px; }
+    main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 18px; padding: 18px 20px; }
+    @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+    .stage { position: relative; display: inline-block; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #000; cursor: crosshair; }
+    .stage img { display: block; width: 720px; height: 720px; max-width: 100%; height: auto; user-select: none; -webkit-user-drag: none; }
+    .stage svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    .pair { display: flex; gap: 12px; flex-wrap: wrap; }
+    .pair figure { margin: 0; }
+    .pair .stage { cursor: default; }
+    .pair img { width: 420px; height: 420px; max-width: 42vw; max-height: 42vw; }
+    figcaption { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    aside { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; align-self: start; }
+    aside h2 { font-size: 15px; margin-bottom: 6px; }
+    aside p, aside li { font-size: 13px; line-height: 1.45; color: #cbd5e1; }
+    aside ul { padding-left: 18px; margin: 6px 0 10px; }
+    .readout { font-size: 26px; font-weight: 800; margin: 10px 0 4px; font-variant-numeric: tabular-nums; }
+    .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+    button.act { padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--text); font-weight: 600; cursor: pointer; font-size: 13px; }
+    button.act:hover { border-color: var(--blue); }
+    button.primary { background: var(--green); border-color: var(--green); color: #022c22; }
+    button.warn { border-color: var(--amber); color: var(--amber); }
+    .grades { grid-template-columns: 1fr; }
+    kbd { font-family: ui-monospace, Menlo, monospace; font-size: 11px; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); background: var(--bg); color: var(--muted); margin-left: 6px; }
+    .strip { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 12px; }
+    .dot { width: 22px; height: 22px; border-radius: 5px; background: var(--card); border: 1px solid var(--line); font-size: 10px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--muted); }
+    .dot.done { background: rgba(16, 185, 129, 0.25); border-color: var(--green); color: var(--text); }
+    .dot.other { background: rgba(245, 158, 11, 0.2); border-color: var(--amber); color: var(--text); }
+    .dot.current { outline: 2px solid var(--blue); }
+    .saved { color: var(--green); font-size: 13px; min-height: 18px; margin-top: 8px; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>FirstLight · Ground-truth labelling</h1>
+    <div class="tabs">
+      <button type="button" class="tab active" data-tab="roads" id="tab-roads">Road widths</button>
+      <button type="button" class="tab" data-tab="buildings" id="tab-buildings">Building damage</button>
+    </div>
+    <span class="muted">Blind labelling: model answers are never shown here.</span>
+  </header>
+
+  <main id="roads-view">
+    <div>
+      <div class="stage" id="road-stage">
+        <img id="road-img" alt="NOAA post-event crop around the cross-section" />
+        <svg id="road-svg" viewBox="0 0 320 320" preserveAspectRatio="none"></svg>
+      </div>
+      <p class="muted" style="margin-top:6px">80 m × 80 m NOAA crop (Oct 11, 2018) · 0.25 m/px · yellow dashed line = the cross-section to measure</p>
+    </div>
+    <aside>
+      <h2 id="road-title">Road sample</h2>
+      <p>Click the <b>two edges of the surface a vehicle could drive on</b>, along the yellow line (clicks snap to it):</p>
+      <ul>
+        <li>Count pavement or packed ground that is free of rubble, sand piles or water.</li>
+        <li>Stop at debris, a building, a ditch or deep sand.</li>
+        <li>The OSM line can be offset from the real road. Measure the real road nearest the middle.</li>
+      </ul>
+      <div class="readout" id="road-readout">— m</div>
+      <div class="btns">
+        <button type="button" class="act primary" id="btn-road-save">Save width<kbd>Enter</kbd></button>
+        <button type="button" class="act" id="btn-road-reset">Clear clicks<kbd>R</kbd></button>
+        <button type="button" class="act warn" id="btn-road-blocked">Fully blocked (0 m)<kbd>B</kbd></button>
+        <button type="button" class="act" id="btn-road-cant">Can't tell<kbd>C</kbd></button>
+        <button type="button" class="act" id="btn-road-prev">← Previous</button>
+        <button type="button" class="act" id="btn-road-next">Next →</button>
+      </div>
+      <div class="saved" id="road-saved"></div>
+      <div class="strip" id="road-strip"></div>
+    </aside>
+  </main>
+
+  <main id="buildings-view" class="hidden">
+    <div class="pair">
+      <figure>
+        <div class="stage"><img id="bldg-pre" alt="2017 NAIP pre-event crop" /><svg id="bldg-svg-pre" viewBox="0 0 240 240" preserveAspectRatio="none"></svg></div>
+        <figcaption>Before · USDA NAIP, Oct/Nov 2017 (1 m)</figcaption>
+      </figure>
+      <figure>
+        <div class="stage"><img id="bldg-post" alt="NOAA post-event crop" /><svg id="bldg-svg-post" viewBox="0 0 240 240" preserveAspectRatio="none"></svg></div>
+        <figcaption>After · NOAA, Oct 11, 2018 (0.28 m)</figcaption>
+      </figure>
+    </div>
+    <aside>
+      <h2 id="bldg-title">Building sample</h2>
+      <p>Grade the building inside the yellow outline (xBD scale):</p>
+      <ul>
+        <li><b>No damage</b>: roof intact.</li>
+        <li><b>Minor</b>: some shingles or roof cover missing, tarp, small debris.</li>
+        <li><b>Major</b>: part of the roof or walls collapsed, large holes.</li>
+        <li><b>Destroyed</b>: collapsed, shifted off its slab, or gone.</li>
+      </ul>
+      <div class="btns grades">
+        <button type="button" class="act" data-grade="no_damage">No damage<kbd>0</kbd></button>
+        <button type="button" class="act" data-grade="minor_damage">Minor damage<kbd>1</kbd></button>
+        <button type="button" class="act" data-grade="major_damage">Major damage<kbd>2</kbd></button>
+        <button type="button" class="act" data-grade="destroyed">Destroyed<kbd>3</kbd></button>
+        <button type="button" class="act" data-grade="cant_tell">Can't tell<kbd>C</kbd></button>
+      </div>
+      <div class="btns">
+        <button type="button" class="act" id="btn-bldg-prev">← Previous</button>
+        <button type="button" class="act" id="btn-bldg-next">Next →</button>
+      </div>
+      <div class="saved" id="bldg-saved"></div>
+      <div class="strip" id="bldg-strip"></div>
+    </aside>
+  </main>
+
+  <script>
+    (function () {
+      "use strict";
+      const CROP_PX = { road: 320, bldg: 240 };
+      const st = { tab: "roads", roads: [], roadLabels: {}, ri: 0, clicks: [], bldgs: [], bldgLabels: {}, bi: 0 };
+      const $ = (id) => document.getElementById(id);
+
+      async function api(path, body) {
+        const res = await fetch(path, body === undefined ? {} : {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+        return res.json();
+      }
+
+      function firstUnlabeled(list, labels) {
+        const i = list.findIndex((s) => !labels[s.sample_id]);
+        return i === -1 ? 0 : i;
+      }
+
+      function renderStrip(el, list, labels, current, onPick, isOther) {
+        el.innerHTML = "";
+        list.forEach((s, i) => {
+          const d = document.createElement("div");
+          const lab = labels[s.sample_id];
+          d.className = "dot" + (lab ? (isOther(lab) ? " other" : " done") : "") + (i === current ? " current" : "");
+          d.textContent = String(i + 1);
+          d.title = s.sample_id;
+          d.addEventListener("click", () => onPick(i));
+          el.appendChild(d);
+        });
+      }
+
+      // ---- Roads ----
+      function project(pt, ray) {
+        const [a, b] = ray;
+        const dx = b[0] - a[0], dy = b[1] - a[1];
+        const t = Math.max(0, Math.min(1, ((pt[0] - a[0]) * dx + (pt[1] - a[1]) * dy) / (dx * dx + dy * dy)));
+        return [a[0] + t * dx, a[1] + t * dy];
+      }
+
+      function drawRoad() {
+        const s = st.roads[st.ri];
+        const svg = $("road-svg");
+        const [a, b] = s.ray_px;
+        let html = `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="#facc15" stroke-width="1" stroke-dasharray="3 2" />`;
+        if (st.clicks.length === 2) {
+          const [p, q] = st.clicks;
+          html += `<line x1="${p[0]}" y1="${p[1]}" x2="${q[0]}" y2="${q[1]}" stroke="#38bdf8" stroke-width="2.2" />`;
+        }
+        st.clicks.forEach((p) => { html += `<circle cx="${p[0]}" cy="${p[1]}" r="2.6" fill="#38bdf8" stroke="#0b1120" stroke-width="0.8" />`; });
+        svg.innerHTML = html;
+        $("road-readout").textContent = st.clicks.length === 2
+          ? `${(Math.hypot(st.clicks[1][0] - st.clicks[0][0], st.clicks[1][1] - st.clicks[0][1]) * s.crop_res_m).toFixed(2)} m`
+          : (st.clicks.length === 1 ? "click the other edge" : "— m");
+      }
+
+      function showRoad(i) {
+        st.ri = (i + st.roads.length) % st.roads.length;
+        st.clicks = [];
+        const s = st.roads[st.ri];
+        $("road-img").src = `/api/label/roads/${s.sample_id}/post.png`;
+        const lab = st.roadLabels[s.sample_id];
+        $("road-title").textContent = `${s.sample_id} · ${st.ri + 1} of ${st.roads.length}`;
+        $("road-saved").textContent = lab
+          ? `Saved: ${lab.status === "measured" ? lab.width_m.toFixed(2) + " m" : lab.status.replace("_", " ")}`
+          : "";
+        drawRoad();
+        renderStrip($("road-strip"), st.roads, st.roadLabels, st.ri, showRoad, (l) => l.status !== "measured");
+      }
+
+      async function saveRoad(body) {
+        const s = st.roads[st.ri];
+        try {
+          st.roadLabels[s.sample_id] = await api(`/api/label/roads/${s.sample_id}`, body);
+          showRoad(firstUnlabeledAfter(st.roads, st.roadLabels, st.ri));
+        } catch (err) {
+          $("road-saved").textContent = `⚠ ${err.message}`;
+        }
+      }
+
+      function firstUnlabeledAfter(list, labels, from) {
+        for (let k = 1; k <= list.length; k++) {
+          const i = (from + k) % list.length;
+          if (!labels[list[i].sample_id]) return i;
+        }
+        return (from + 1) % list.length;
+      }
+
+      $("road-stage").addEventListener("click", (ev) => {
+        const rect = $("road-img").getBoundingClientRect();
+        const pt = [((ev.clientX - rect.left) / rect.width) * CROP_PX.road, ((ev.clientY - rect.top) / rect.height) * CROP_PX.road];
+        const snapped = project(pt, st.roads[st.ri].ray_px);
+        st.clicks = st.clicks.length >= 2 ? [snapped] : st.clicks.concat([snapped]);
+        drawRoad();
+      });
+      $("btn-road-save").addEventListener("click", () => {
+        if (st.clicks.length === 2) saveRoad({ status: "measured", p1: st.clicks[0], p2: st.clicks[1] });
+      });
+      $("btn-road-reset").addEventListener("click", () => { st.clicks = []; drawRoad(); });
+      $("btn-road-blocked").addEventListener("click", () => saveRoad({ status: "blocked" }));
+      $("btn-road-cant").addEventListener("click", () => saveRoad({ status: "cant_tell" }));
+      $("btn-road-prev").addEventListener("click", () => showRoad(st.ri - 1));
+      $("btn-road-next").addEventListener("click", () => showRoad(st.ri + 1));
+
+      // ---- Buildings ----
+      function showBldg(i) {
+        st.bi = (i + st.bldgs.length) % st.bldgs.length;
+        const s = st.bldgs[st.bi];
+        $("bldg-pre").src = `/api/label/buildings/${s.sample_id}/pre.png`;
+        $("bldg-post").src = `/api/label/buildings/${s.sample_id}/post.png`;
+        const poly = s.outline_px.map((p) => p.join(",")).join(" ");
+        const outline = `<polygon points="${poly}" fill="none" stroke="#facc15" stroke-width="1.2" stroke-dasharray="3 2" />`;
+        $("bldg-svg-pre").innerHTML = outline;
+        $("bldg-svg-post").innerHTML = outline;
+        const lab = st.bldgLabels[s.sample_id];
+        $("bldg-title").textContent = `${s.sample_id} · ${st.bi + 1} of ${st.bldgs.length}`;
+        $("bldg-saved").textContent = lab ? `Saved: ${lab.grade.replace("_", " ")}` : "";
+        document.querySelectorAll("[data-grade]").forEach((b) => {
+          b.classList.toggle("primary", Boolean(lab && lab.grade === b.dataset.grade));
+        });
+        renderStrip($("bldg-strip"), st.bldgs, st.bldgLabels, st.bi, showBldg, (l) => l.grade === "cant_tell");
+      }
+
+      async function saveBldg(grade) {
+        const s = st.bldgs[st.bi];
+        try {
+          st.bldgLabels[s.sample_id] = await api(`/api/label/buildings/${s.sample_id}`, { grade });
+          showBldg(firstUnlabeledAfter(st.bldgs, st.bldgLabels, st.bi));
+        } catch (err) {
+          $("bldg-saved").textContent = `⚠ ${err.message}`;
+        }
+      }
+
+      document.querySelectorAll("[data-grade]").forEach((b) => b.addEventListener("click", () => saveBldg(b.dataset.grade)));
+      $("btn-bldg-prev").addEventListener("click", () => showBldg(st.bi - 1));
+      $("btn-bldg-next").addEventListener("click", () => showBldg(st.bi + 1));
+
+      // ---- Tabs & keys ----
+      function setTab(tab) {
+        st.tab = tab;
+        document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
+        $("roads-view").classList.toggle("hidden", tab !== "roads");
+        $("buildings-view").classList.toggle("hidden", tab !== "buildings");
+      }
+      document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => setTab(t.dataset.tab)));
+
+      document.addEventListener("keydown", (ev) => {
+        const k = ev.key.toLowerCase();
+        if (st.tab === "roads") {
+          if (k === "enter") $("btn-road-save").click();
+          else if (k === "r") $("btn-road-reset").click();
+          else if (k === "b") $("btn-road-blocked").click();
+          else if (k === "c") $("btn-road-cant").click();
+          else if (k === "arrowleft") showRoad(st.ri - 1);
+          else if (k === "arrowright") showRoad(st.ri + 1);
+        } else {
+          const map = { 0: "no_damage", 1: "minor_damage", 2: "major_damage", 3: "destroyed", c: "cant_tell" };
+          if (map[k]) saveBldg(map[k]);
+          else if (k === "arrowleft") showBldg(st.bi - 1);
+          else if (k === "arrowright") showBldg(st.bi + 1);
+        }
+      });
+
+      (async function init() {
+        const roads = await api("/api/label/roads");
+        st.roads = roads.samples; st.roadLabels = roads.labels;
+        const bldgs = await api("/api/label/buildings");
+        st.bldgs = bldgs.samples; st.bldgLabels = bldgs.labels;
+        showRoad(firstUnlabeled(st.roads, st.roadLabels));
+        showBldg(firstUnlabeled(st.bldgs, st.bldgLabels));
+      })();
+    })();
+  </script>
+</body>
+</html>

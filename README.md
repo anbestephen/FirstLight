@@ -136,28 +136,23 @@ $$\text{Clearance ROI}(e) = \frac{\text{High-Severity Structures Unlocked}(e)}{\
 
 ---
 
-## 5. Ground-Truth Evaluation & Benchmark Results
+## 5. Held-Out Benchmark (manual labels)
 
-FirstLight includes a reproducible ground-truth benchmark suite ([`benchmarks/run_benchmarks.py`](benchmarks/run_benchmarks.py) and [`data/ground_truth_benchmark.json`](data/ground_truth_benchmark.json)) evaluating our baked **SAM 3.1 (`sam-3.1`)** orthogonal caliper measurements across **15 reference road cross-sections** and **Muse Spark (`muse-spark-1.3`)** damage classifications across **30 reference structures** in the Mexico Beach AOI.
+Model outputs are scored only against labels a person records **blind** (no model answers shown) in the built-in labelling tool:
 
-Execute the benchmark at any time via:
+| Benchmark | Samples (fixed seed, `scripts/make_benchmark_samples.py`) | Ground truth | Compared against |
+| :--- | :--- | :--- | :--- |
+| Road clear width | 40 SAM 3.1 cross-sections, stratified over clear / debris / not-visible | Hand-measured drivable width on the 0.28 m NOAA image (`data/ground_truth/road_widths_manual.json`) | SAM 3.1 visible-pavement width at the same 5 m station |
+| Building damage | 40 random buildings | Hand grade from 2017 NAIP (before) vs 2018 NOAA (after) (`data/ground_truth/building_damage_manual.json`) | Muse Spark grades in `data/osm_buildings_graded.geojson` |
+
+Reported metrics: width MAE / bias / RMSE, per-vehicle passability agreement with **false-passable** counted separately (the dangerous error), SAM confidence vs error (used to set the drone-recon threshold), and building 4-class / high-severity precision, recall and F1.
+
 ```bash
-./.venv/bin/python benchmarks/run_benchmarks.py
+./.venv/bin/uvicorn src.app:app --port 8000      # then label at http://localhost:8000/label
+./.venv/bin/python benchmarks/run_benchmarks.py  # writes benchmarks/benchmark_results.json
 ```
 
-### Verified Benchmark Summary (`benchmarks/benchmark_results.json`)
-
-| Evaluation Category | Metric | Measured Result | Engineering Interpretation |
-| :--- | :--- | :---: | :--- |
-| **SAM 3.1 Orthogonal Caliper (`n = 15` corridors)** | **Mean Absolute Error (`mae_m`)** | **`0.1587 m`** (`0.57 px`) | Sub-pixel accuracy at `0.2804 m/px` Ground Sample Distance (`EPSG:32616`). |
-| **SAM 3.1 Orthogonal Caliper (`n = 15` corridors)** | **Root Mean Squared Error (`rmse_m`)** | **`0.2067 m`** | Tight variance across clear highways, pinched residential streets, and flooded segments. |
-| **Vehicle Passability Classification** | **ATV (`>= 1.2 m`) Accuracy** | **`100.0%`** (`1.0000`) | Zero false-passable or false-blocked corridors for Search & Rescue ATVs. |
-| **Vehicle Passability Classification** | **Ambulance (`>= 2.2 m`) Accuracy** | **`100.0%`** (`1.0000`) | 100% agreement with pixel-measured ground truth across all 15 corridors. |
-| **Vehicle Passability Classification** | **Fire Engine (`>= 3.5 m`) Accuracy** | **`100.0%`** (`1.0000`) | Correctly blocks corridors pinched between `2.2 m` and `3.4 m`. |
-| **Muse Spark 1.3 Building Grading (`n = 30` structures)** | **High-Severity Binary Accuracy** | **`96.67%`** (`0.9667`) | Distinguishes `major_damage`/`destroyed` vs. `minor_damage`/`no_damage`. |
-| **Muse Spark 1.3 Building Grading (`n = 30` structures)** | **High-Severity F1 Score** | **`0.9655`** | Precision = `1.0000`, Recall = `0.9333` on high-priority rescue structures. |
-| **Muse Spark 1.3 Building Grading (`n = 30` structures)** | **4-Class Exact Match Accuracy** | **`93.33%`** (`0.9333`) | Across `no_damage`, `minor_damage`, `major_damage`, and `destroyed`. |
-| **SAM 3.1 Confidence & Recon Telemetry (`312` edges)** | **Mean Mask Confidence (`sam_confidence`)** | **`0.7355`** (`0.6708–0.8718`) | `228` high-confidence corridors; `84` corridors flagged with `needs_drone_recon=True`. |
+_Results are published here once labelling is complete._
 
 ---
 
@@ -214,13 +209,14 @@ FirstLight/
 ├── requirements.txt           # Core dependencies (FastAPI, Rasterio, GeoPandas, MLX, PyTorch)
 ├── benchmarks/                # Ground-truth evaluation suite & verified accuracy metrics
 │   ├── run_benchmarks.py      # Evaluates SAM 3.1 caliper widths & Muse Spark 1.3 building grades
-│   └── benchmark_results.json # Saved MAE (0.1587m), RMSE (0.2067m), and F1 (0.9655) metrics
+│   └── benchmark_results.json # Metrics vs manual labels (written by run_benchmarks.py)
 ├── data/                      # 100% locally cached Mexico Beach, FL (Hurricane Michael) datasets
 │   ├── noaa_michael_mexico_beach.tif     # Post-event NOAA GeoTIFF (0.2804 m/px GSD in EPSG:32616)
 │   ├── sam31_edge_measurements.json      # SAM 3.1 per-road stations, widths, causes, confidence
 │   ├── sam31_mexico_beach_masks.geojson  # 1,218 SAM 3.1 pavement/debris/water polygons near roads
 │   ├── osm_buildings_graded.geojson      # 334 buildings graded by live Muse Spark 1.3 vision calls
-│   ├── ground_truth_benchmark.json       # 15 reference road cross-sections & 30 reference buildings
+│   ├── ground_truth/                     # Held-out samples + blind manual labels (/label tool)
+│   ├── naip_2017_mexico_beach.tif        # Pre-event USDA NAIP 2017 (scripts/fetch_pre_event_naip.py)
 │   ├── osm_road_graph.graphml            # Cached OSM road network (125 nodes, 312 edges)
 │   ├── osm_roads.geojson                 # Road centerlines (312 features)
 │   └── osm_buildings.geojson             # Raw OSM building footprints (334 structures)
