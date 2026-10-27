@@ -57,6 +57,12 @@
       <button type="button" class="tab active" data-tab="roads" id="tab-roads">Road widths</button>
       <button type="button" class="tab" data-tab="buildings" id="tab-buildings">Building damage</button>
     </div>
+    <label class="muted">Sample set
+      <select id="set-select" style="margin-left:6px;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:4px 6px">
+        <option value="test">Final test set</option>
+        <option value="dev">Tuning set (done)</option>
+      </select>
+    </label>
     <span class="muted">Blind labelling: model answers are never shown here.</span>
   </header>
 
@@ -130,11 +136,13 @@
     (function () {
       "use strict";
       const CROP_PX = { road: 320, bldg: 240 };
+      const SET = new URLSearchParams(location.search).get("set") || "test";
+      const q = (path) => `${path}${path.includes("?") ? "&" : "?"}set=${SET}`;
       const st = { tab: "roads", roads: [], roadLabels: {}, ri: 0, clicks: [], bldgs: [], bldgLabels: {}, bi: 0 };
       const $ = (id) => document.getElementById(id);
 
       async function api(path, body) {
-        const res = await fetch(path, body === undefined ? {} : {
+        const res = await fetch(q(path), body === undefined ? {} : {
           method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
         });
         if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
@@ -187,7 +195,7 @@
         st.ri = (i + st.roads.length) % st.roads.length;
         st.clicks = [];
         const s = st.roads[st.ri];
-        $("road-img").src = `/api/label/roads/${s.sample_id}/post.png`;
+        $("road-img").src = q(`/api/label/roads/${s.sample_id}/post.png`);
         const lab = st.roadLabels[s.sample_id];
         $("road-title").textContent = `${s.sample_id} · ${st.ri + 1} of ${st.roads.length}`;
         $("road-saved").textContent = lab
@@ -235,8 +243,8 @@
       function showBldg(i) {
         st.bi = (i + st.bldgs.length) % st.bldgs.length;
         const s = st.bldgs[st.bi];
-        $("bldg-pre").src = `/api/label/buildings/${s.sample_id}/pre.png`;
-        $("bldg-post").src = `/api/label/buildings/${s.sample_id}/post.png`;
+        $("bldg-pre").src = q(`/api/label/buildings/${s.sample_id}/pre.png`);
+        $("bldg-post").src = q(`/api/label/buildings/${s.sample_id}/post.png`);
         const poly = s.outline_px.map((p) => p.join(",")).join(" ");
         const outline = `<polygon points="${poly}" fill="none" stroke="#facc15" stroke-width="1.2" stroke-dasharray="3 2" />`;
         $("bldg-svg-pre").innerHTML = outline;
@@ -289,6 +297,10 @@
           else if (k === "arrowright") showBldg(st.bi + 1);
         }
       });
+
+      const setSelect = $("set-select");
+      setSelect.value = SET;
+      setSelect.addEventListener("change", () => { location.search = `?set=${setSelect.value}`; });
 
       (async function init() {
         const roads = await api("/api/label/roads");

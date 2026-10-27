@@ -74,3 +74,21 @@ def test_building_grade_and_crops() -> None:
     assert client.post(f"/api/label/buildings/{sample['sample_id']}", json={"grade": "awful"}).status_code == 422
     post = client.get(f"/api/label/buildings/{sample['sample_id']}/post.png")
     assert post.status_code == 200 and post.headers["content-type"] == "image/png"
+
+
+def test_test_set_is_served_separately_and_disjoint_from_dev(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    dev = client.get("/api/label/roads").json()["samples"]
+    test = client.get("/api/label/roads?set=test").json()["samples"]
+    assert len(test) == 40
+    assert {s["sample_id"] for s in dev}.isdisjoint({s["sample_id"] for s in test})
+    assert client.get("/api/label/roads?set=bogus").status_code == 422
+
+    real_paths = labeling._paths
+    monkeypatch.setattr(
+        labeling,
+        "_paths",
+        lambda label_set: {**real_paths(label_set), "building_labels": tmp_path / f"b_{label_set}.json"},
+    )
+    sample = client.get("/api/label/buildings?set=test").json()["samples"][0]
+    client.post(f"/api/label/buildings/{sample['sample_id']}?set=test", json={"grade": "minor_damage"})
+    assert (tmp_path / "b_test.json").exists() and not (tmp_path / "b_dev.json").exists()

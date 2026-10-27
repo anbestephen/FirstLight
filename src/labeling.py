@@ -45,6 +45,7 @@ CROP_RES_M = 0.25
 ROAD_HALF_EXTENT_M = 40.0
 BUILDING_HALF_EXTENT_M = 30.0
 DAMAGE_GRADES = ("no_damage", "minor_damage", "major_damage", "destroyed", "cant_tell")
+LabelSet = Literal["dev", "test"]
 
 router = APIRouter()
 _lock = threading.Lock()
@@ -61,6 +62,23 @@ class RoadLabel(BaseModel):
 
 class BuildingLabel(BaseModel):
     grade: Literal["no_damage", "minor_damage", "major_damage", "destroyed", "cant_tell"]
+
+
+def _paths(label_set: str) -> dict[str, Path]:
+    """Sample and label files for the dev (tuning) or test (final held-out) set."""
+    if label_set == "dev":
+        return {
+            "road_samples": ROAD_SAMPLES_PATH,
+            "road_labels": ROAD_LABELS_PATH,
+            "building_samples": BUILDING_SAMPLES_PATH,
+            "building_labels": BUILDING_LABELS_PATH,
+        }
+    return {
+        "road_samples": GT_DIR / f"road_width_samples_{label_set}.json",
+        "road_labels": GT_DIR / f"road_widths_manual_{label_set}.json",
+        "building_samples": GT_DIR / f"building_samples_{label_set}.json",
+        "building_labels": GT_DIR / f"building_damage_manual_{label_set}.json",
+    }
 
 
 def _read_json(path: Path, default: dict[str, Any]) -> dict[str, Any]:
@@ -134,25 +152,27 @@ def _png(key: str, render) -> Response:
 
 
 @router.get("/api/label/roads")
-def list_road_samples() -> dict[str, Any]:
+def list_road_samples(set: LabelSet = "dev") -> dict[str, Any]:
     """Road cross-sections to label (ray in crop pixels) plus labels recorded so far."""
+    paths = _paths(set)
     out = []
-    for s in _samples(ROAD_SAMPLES_PATH):
+    for s in _samples(paths["road_samples"]):
         ray_px = [utm_to_pixel(x, y, s["center_utm"], ROAD_HALF_EXTENT_M) for x, y in s["ray_utm"]]
         out.append({"sample_id": s["sample_id"], "ray_px": ray_px, "crop_res_m": CROP_RES_M})
-    return {"samples": out, "labels": _read_json(ROAD_LABELS_PATH, {"labels": {}})["labels"]}
+    return {"samples": out, "labels": _read_json(paths["road_labels"], {"labels": {}})["labels"]}
 
 
 @router.get("/api/label/roads/{sample_id}/post.png")
-def road_crop(sample_id: str) -> Response:
-    s = _sample(ROAD_SAMPLES_PATH, sample_id)
+def road_crop(sample_id: str, set: LabelSet = "dev") -> Response:
+    s = _sample(_paths(set)["road_samples"], sample_id)
     return _png(f"road:{sample_id}", lambda: render_metric_crop(POST_EVENT_PATH, s["center_utm"], ROAD_HALF_EXTENT_M))
 
 
 @router.post("/api/label/roads/{sample_id}")
-def save_road_label(sample_id: str, label: RoadLabel) -> dict[str, Any]:
+def save_road_label(sample_id: str, label: RoadLabel, set: LabelSet = "dev") -> dict[str, Any]:
     """Store the clear drivable width (metres along the cross-section) for one sample."""
-    s = _sample(ROAD_SAMPLES_PATH, sample_id)
+    paths = _paths(set)
+    s = _sample(paths["road_samples"], sample_id)
     record: dict[str, Any] = {"status": label.status, "edge_id": s["edge_id"], "station_index": s["station_index"]}
     if label.status == "measured":
         if not label.p1 or not label.p2:
@@ -166,27 +186,28 @@ def save_road_label(sample_id: str, label: RoadLabel) -> dict[str, Any]:
         record.update({"width_m": round(width, 2), "p1_utm": [round(c, 2) for c in a], "p2_utm": [round(c, 2) for c in b]})
     elif label.status == "blocked":
         record["width_m"] = 0.0
-    _write_labels(ROAD_LABELS_PATH, sample_id, record)
+    _write_labels(paths["road_labels"], sample_id, record)
     return record
 
 
 @router.get("/api/label/buildings")
-def list_building_samples() -> dict[str, Any]:
+def list_building_samples(set: LabelSet = "dev") -> dict[str, Any]:
+    paths = _paths(set)
     out = []
-    for s in _samples(BUILDING_SAMPLES_PATH):
+    for s in _samples(paths["building_samples"]):
         outline = [utm_to_pixel(x, y, s["centroid_utm"], BUILDING_HALF_EXTENT_M) for x, y in s["footprint_utm"]]
         out.append({"sample_id": s["sample_id"], "outline_px": outline})
     return {
         "samples": out,
         "grades": DAMAGE_GRADES,
         "pre_event_available": PRE_EVENT_PATH.exists(),
-        "labels": _read_json(BUILDING_LABELS_PATH, {"labels": {}})["labels"],
+        "labels": _read_json(paths["building_labels"], {"labels": {}})["labels"],
     }
 
 
 @router.get("/api/label/buildings/{sample_id}/{phase}.png")
-def building_crop(sample_id: str, phase: Literal["pre", "post"]) -> Response:
-    s = _sample(BUILDING_SAMPLES_PATH, sample_id)
+def building_crop(sample_id: str, phase: Literal["pre", "post"], set: LabelSet = "dev") -> Response:
+    s = _sample(_paths(set)["building_samples"], sample_id)
     path = PRE_EVENT_PATH if phase == "pre" else POST_EVENT_PATH
     if not path.exists():
         raise HTTPException(404, f"{path.name} missing")
@@ -194,8 +215,9 @@ def building_crop(sample_id: str, phase: Literal["pre", "post"]) -> Response:
 
 
 @router.post("/api/label/buildings/{sample_id}")
-def save_building_label(sample_id: str, label: BuildingLabel) -> dict[str, Any]:
-    s = _sample(BUILDING_SAMPLES_PATH, sample_id)
+def save_building_label(sample_id: str, label: BuildingLabel, set: LabelSet = "dev") -> dict[str, Any]:
+    paths = _paths(set)
+    s = _sample(paths["building_samples"], sample_id)
     record = {"grade": label.grade, "building_id": s["building_id"]}
-    _write_labels(BUILDING_LABELS_PATH, sample_id, record)
+    _write_labels(paths["building_labels"], sample_id, record)
     return record

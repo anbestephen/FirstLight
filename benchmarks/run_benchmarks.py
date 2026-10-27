@@ -9,6 +9,10 @@ Compares model outputs against labels a human recorded blind in the `/label` too
 2. Building damage grades (`data/osm_buildings_graded.geojson`) vs hand labels from
    pre/post imagery (`data/ground_truth/building_damage_manual.json`).
 
+Two label sets: `dev` (used to tune SAM width rules and the grading prompt) and `test`
+(drawn afterwards with a different seed, never used for tuning). The test set is the
+headline result.
+
 This script only reads labels; it never creates or edits them.
 Writes `benchmarks/benchmark_results.json`.
 """
@@ -23,9 +27,10 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 GT_DIR = PROJECT_ROOT / "data" / "ground_truth"
-ROAD_LABELS_PATH = GT_DIR / "road_widths_manual.json"
-BUILDING_LABELS_PATH = GT_DIR / "building_damage_manual.json"
-BUILDING_SAMPLES_PATH = GT_DIR / "building_samples.json"
+LABEL_FILES = {
+    "dev": (GT_DIR / "road_widths_manual.json", GT_DIR / "building_damage_manual.json"),
+    "test": (GT_DIR / "road_widths_manual_test.json", GT_DIR / "building_damage_manual_test.json"),
+}
 MEASUREMENTS_PATH = PROJECT_ROOT / "data" / "sam31_edge_measurements.json"
 GRADED_BUILDINGS_PATH = PROJECT_ROOT / "data" / "osm_buildings_graded.geojson"
 RESULTS_PATH = PROJECT_ROOT / "benchmarks" / "benchmark_results.json"
@@ -145,24 +150,28 @@ def _labels(path: Path) -> dict[str, Any]:
 
 
 def run_benchmark() -> dict[str, Any]:
-    road_labels = _labels(ROAD_LABELS_PATH)
-    building_labels = _labels(BUILDING_LABELS_PATH)
     measurements = json.loads(MEASUREMENTS_PATH.read_text(encoding="utf-8"))["edges"]
-
     graded = json.loads(GRADED_BUILDINGS_PATH.read_text(encoding="utf-8")) if GRADED_BUILDINGS_PATH.exists() else {}
     predictions = {
         f["properties"]["building_id"]: f["properties"]["damage_severity"] for f in graded.get("features", [])
     }
-    source = str(graded.get("properties", {}).get("grading_method", graded.get("properties", {}).get("grading_source", "unknown")))
+    props = graded.get("properties", {})
+    source = str(props.get("grading_method", props.get("grading_source", "unknown")))
 
+    sets: dict[str, Any] = {}
+    for name, (road_path, building_path) in LABEL_FILES.items():
+        sets[name] = {
+            "label_files": {
+                "roads": str(road_path.relative_to(PROJECT_ROOT)),
+                "buildings": str(building_path.relative_to(PROJECT_ROOT)),
+            },
+            "road_widths_sam31": road_metrics(_labels(road_path), measurements),
+            "building_damage": building_metrics(_labels(building_path), predictions, source),
+        }
     results = {
         "benchmark": "FirstLight held-out manual labels (Mexico Beach, Hurricane Michael)",
-        "label_files": {
-            "roads": str(ROAD_LABELS_PATH.relative_to(PROJECT_ROOT)),
-            "buildings": str(BUILDING_LABELS_PATH.relative_to(PROJECT_ROOT)),
-        },
-        "road_widths_sam31": road_metrics(road_labels, measurements),
-        "building_damage": building_metrics(building_labels, predictions, source),
+        "note": "dev = tuning set; test = final held-out set never used for tuning",
+        "sets": sets,
     }
     RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
     RESULTS_PATH.write_text(json.dumps(results, indent=2), encoding="utf-8")
@@ -171,8 +180,11 @@ def run_benchmark() -> dict[str, Any]:
 
 if __name__ == "__main__":
     out = run_benchmark()
-    roads, bldg = out["road_widths_sam31"], out["building_damage"]
-    if not roads.get("labeled") and not bldg.get("labeled"):
-        print("No manual labels yet: open http://localhost:8000/label, then re-run this script.")
-    print(json.dumps({k: v for k, v in roads.items() if k != "pairs"}, indent=2))
-    print(json.dumps(bldg, indent=2))
+    for name, res in out["sets"].items():
+        roads, bldg = res["road_widths_sam31"], res["building_damage"]
+        print(f"=== {name} set ===")
+        if not roads.get("labeled") and not bldg.get("labeled"):
+            print(f"No labels yet: open http://localhost:8000/label?set={name}")
+            continue
+        print(json.dumps({k: v for k, v in roads.items() if k != "pairs"}, indent=2))
+        print(json.dumps(bldg, indent=2))
