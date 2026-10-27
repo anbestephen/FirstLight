@@ -382,12 +382,337 @@
         "buildings": "data/ground_truth/building_damage_manual_test.json"
       },
       "road_widths_sam31": {
-        "labeled": 0,
-        "cant_tell": 0
+        "labeled": 35,
+        "cant_tell": 5,
+        "mae_m": 1.09,
+        "median_abs_error_m": 0.39,
+        "rmse_m": 2.325,
+        "bias_m": -0.04,
+        "passability": {
+          "atv": {
+            "agreement": 0.9714,
+            "false_passable": 0,
+            "false_blocked": 1
+          },
+          "ambulance": {
+            "agreement": 0.9429,
+            "false_passable": 0,
+            "false_blocked": 2
+          },
+          "fire_engine": {
+            "agreement": 0.9714,
+            "false_passable": 0,
+            "false_blocked": 1
+          }
+        },
+        "confidence_calibration": [
+          {
+            "confidence": "0.0-0.6",
+            "n": 3,
+            "mae_m": 1.54,
+            "ambulance_agreement": 1.0
+          },
+          {
+            "confidence": "0.6-0.8",
+            "n": 6,
+            "mae_m": 4.057,
+            "ambulance_agreement": 0.8333
+          },
+          {
+            "confidence": "0.8-1.0",
+            "n": 26,
+            "mae_m": 0.353,
+            "ambulance_agreement": 0.9615
+          }
+        ],
+        "sam_not_visible_stations": {
+          "n": 4,
+          "human_blocked": 3,
+          "human_cant_tell": 2
+        },
+        "pairs": [
+          {
+            "sample_id": "troad-01",
+            "human_width_m": 6.44,
+            "sam_width_m": 10.0,
+            "sam_cause": "clear",
+            "sam_confidence": 0.597
+          },
+          {
+            "sample_id": "troad-02",
+            "human_width_m": 0.0,
+            "sam_width_m": 0.0,
+            "sam_cause": "debris",
+            "sam_confidence": 0.936
+          },
+          {
+            "sample_id": "troad-03",
+            "human_width_m": 5.82,
+            "sam_width_m": 5.75,
+            "sam_cause": "clear",
+            "sam_confidence": 0.871
+          },
+          {
+            "sample_id": "troad-04",
+            "human_width_m": 0.0,
+            "sam_width_m": 0.0,
+            "sam_cause": "debris",
+            "sam_confidence": 0.987
+          },
+          {
+            "sample_id": "troad-05",
+            "human_width_m": 6.78,
+            "sam_width_m": 7.0,
+            "sam_cause": "clear",
+            "sam_confidence": 0.946
+          },
+          {
+            "sample_id": "troad-06",
+            "human_width_m": 6.31,
+            "sam_width_m": 6.75,
+            "sam_cause": "clear",
+            "sam_confidence": 0.912
+          },
+          {
+            "sample_id": "troad-09",
+            "human_width_m": 6.67,
+            "sam_width_m": 6.25,
+            "sam_cause": "clear",
+            "sam_confidence": 0.863
+          },
+          {
+            "sample_id": "troad-10",
+            "human_width_m": 0.0,
+            "sam_width_m": 0.0,
+            "sam_cause": "debris",
+            "sam_confidence": 0.989
+          },
+          {
+            "sample_id": "troad-11",
+            "human_width_m": 8.59,
+            "sam_width_m": 6.0,
+            "sam_cause": "narrowed_debris",
+            "sam_confidence": 0.72
+          },
+          {
+            "sample_id": "troad-12",
+            "human_width_m": 10.54,
+            "sam_width_m": 6.0,
+            "sam_cause": "narrowed_debris",
+            "sam_confidence": 0.762
+          },
+          {
+            "sample_id": "troad-13",
+            "human_width_m": 6.0,
+            "sam_width_m": 7.0,
+            "sam_cause": "clear",
+            "sam_confidence": 0.92
+          },
+          {
+            "sample_id": "troad-14",
+            "human_width_m": 9.61,
+            "sam_width_m": 10.0,
+            "sam_cause": "clear",
+            "sam_confidence": 0.648
+          },
+          {
+            "sample_id": "troad-15",
+            "human_width_m": 0.0,
+            "sam_width_m": 0.0,
+            "sam_cause": "debris",
+            "sam_confidence": 0.925
+          },
+          {
+            "sample_id": "troad-16",
+            "human_width_m": 0.0,
+            "sam_width_m": 0.0,
+            "sam_cause": "not_visible",
+            "sam_confidence": 0.933
+          },
+          {
+            "sample_id": "troad-17",
+            "human_width_m": 7.02,
+            "sam_width_m": 6.5,
+            "sam_cause": "narrowed_debris",
+            "sam_confidence": 0.872
+          },
+          {
+            "sample_id": "troad-18",
+            "human_width_m": 4.76,
+            "sam_width_m": 6.0,
+            "sam_cause": "clear",
+            "sam_confidence": 0.91
+          },
+          {
+            "sample_id": "troad-19",
+            "human_width_m": 0.0,
+            "sam_width_m": 0.0,
+            "sam_cause": "not_visible",
+            "sam_confidence": 0.921
+          },
+          {
+            "sample_id": "troad-20",
+            "human_width_m": 4.69,
+            "sam_width_m": 5.75,
+            "sam_cause": "narrowed_debris",
+            "sam_confidence": 0.254
+          },
+          {
+            "sample_id": "troad-21",
+            "human_width_m": 0.0,
+            "sam_width_m": 0.0,
+            "sam_cause": "debris",
+            "sam_confidence": 1.0
+          },
+          {
+            "sample_id": "troad-22",
+            "human_width_m": 0.0,
+            "sam_width_m": 0.0,
+            "sam_cause": "debris",
+            "sam_confidence": 0.997
+          },
+          {
+            "sample_id": "troad-24",
+            "human_width_m": 6.75,
+            "sam_width_m": 6.25,
+            "sam_cause": "clear",
+            "sam_confidence": 0.904
+          },
+          {
+            "sample_id": "troad-25",
+            "human_width_m": 7.78,
+            "sam_width_m": 7.5,
+            "sam_cause": "clear",
+            "sam_confidence": 0.945
+          },
+          {
+            "sample_id": "troad-26",
+            "human_width_m": 8.76,
+            "sam_width_m": 0.0,
+            "sam_cause": "not_visible",
+            "sam_confidence": 0.772
+          },
+          {
+            "sample_id": "troad-27",
+            "human_width_m": 3.62,
+            "sam_width_m": 3.75,
+            "sam_cause": "clear",
+            "sam_confidence": 0.937
+          },
+          {
+            "sample_id": "troad-28",
+            "human_width_m": 7.0,
+            "sam_width_m": 8.75,
+            "sam_cause": "clear",
+            "sam_confidence": 0.901
+          },
+          {
+            "sample_id": "troad-29",
+            "human_width_m": 0.0,
+            "sam_width_m": 0.0,
+            "sam_cause": "not_visible",
+            "sam_confidence": 0.096
+          },
+          {
+            "sample_id": "troad-30",
+            "human_width_m": 4.38,
+            "sam_width_m": 4.5,
+            "sam_cause": "clear",
+            "sam_confidence": 0.646
+          },
+          {
+            "sample_id": "troad-32",
+            "human_width_m": 6.56,
+            "sam_width_m": 6.25,
+            "sam_cause": "clear",
+            "sam_confidence": 0.814
+          },
+          {
+            "sample_id": "troad-33",
+            "human_width_m": 0.0,
+            "sam_width_m": 0.0,
+            "sam_cause": "debris",
+            "sam_confidence": 0.927
+          },
+          {
+            "sample_id": "troad-34",
+            "human_width_m": 7.22,
+            "sam_width_m": 7.25,
+            "sam_cause": "narrowed_debris",
+            "sam_confidence": 0.875
+          },
+          {
+            "sample_id": "troad-35",
+            "human_width_m": 4.06,
+            "sam_width_m": 12.0,
+            "sam_cause": "clear",
+            "sam_confidence": 0.789
+          },
+          {
+            "sample_id": "troad-36",
+            "human_width_m": 10.71,
+            "sam_width_m": 10.0,
+            "sam_cause": "clear",
+            "sam_confidence": 0.846
+          },
+          {
+            "sample_id": "troad-37",
+            "human_width_m": 5.01,
+            "sam_width_m": 5.5,
+            "sam_cause": "clear",
+            "sam_confidence": 0.951
+          },
+          {
+            "sample_id": "troad-39",
+            "human_width_m": 2.61,
+            "sam_width_m": 2.0,
+            "sam_cause": "narrowed_debris",
+            "sam_confidence": 0.909
+          },
+          {
+            "sample_id": "troad-40",
+            "human_width_m": 6.47,
+            "sam_width_m": 6.0,
+            "sam_cause": "clear",
+            "sam_confidence": 0.92
+          }
+        ]
       },
       "building_damage": {
-        "labeled": 0,
-        "grading_source": "muse-spark-1.3 per-building pre/post (NAIP 2017 vs NOAA 2018), prompt xbd-v2"
+        "labeled": 38,
+        "grading_source": "muse-spark-1.3 per-building pre/post (NAIP 2017 vs NOAA 2018), prompt xbd-v2",
+        "four_class_accuracy": 0.4737,
+        "within_one_grade": 0.8947,
+        "high_severity_accuracy": 0.7368,
+        "high_severity_precision": 0.2222,
+        "high_severity_recall": 0.4,
+        "high_severity_f1": 0.2857,
+        "confusion": {
+          "no_damage": {
+            "no_damage": 17,
+            "minor_damage": 1,
+            "major_damage": 1,
+            "destroyed": 3
+          },
+          "minor_damage": {
+            "no_damage": 8,
+            "minor_damage": 0,
+            "major_damage": 3,
+            "destroyed": 0
+          },
+          "major_damage": {
+            "no_damage": 0,
+            "minor_damage": 3,
+            "major_damage": 0,
+            "destroyed": 0
+          },
+          "destroyed": {
+            "no_damage": 0,
+            "minor_damage": 0,
+            "major_damage": 1,
+            "destroyed": 1
+          }
+        }
       }
     }
   }

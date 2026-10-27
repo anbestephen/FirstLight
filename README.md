@@ -152,10 +152,29 @@ Reported metrics: width MAE / bias / RMSE, per-vehicle passability agreement wit
 ./.venv/bin/python benchmarks/run_benchmarks.py  # writes benchmarks/benchmark_results.json
 ```
 
-### Baseline results (40 roads, 40 buildings, labelled blind on Oct 27, 2026)
+### Results (labelled blind on Oct 27, 2026)
 
-| Measure | Result | Reading |
-| :--- | :---: | :--- |
+Tuning was done on the **dev** set only. The **test** set was drawn afterwards with a different seed, disjoint from dev, and is the headline result.
+
+| Measure | Dev baseline | Dev after tuning | **Test (held-out)** |
+| :--- | :---: | :---: | :---: |
+| SAM 3.1 width, median absolute error | 1.94 m | 1.37 m | **0.39 m** |
+| SAM 3.1 width, mean error / bias | 3.45 m / +2.22 m | 2.22 m / +0.53 m | **1.09 m / −0.04 m** |
+| Passability agreement ATV / ambulance / fire engine | 78 / 83 / 80 % | 78 / 83 / 78 % | **97 / 94 / 97 %** |
+| False-passable (dangerous) ATV / ambulance / fire | 5 / 3 / 5 | 5 / 3 / 5 | **0 / 0 / 0** |
+| Muse Spark grade within one class | 88 % | 90 % | **89 %** |
+| Muse Spark exact 4-class match | 58 % | 68 % | **47 %** |
+| High-severity recall / precision | 1.00 / 0.38 | 1.00 / 0.56 | **0.40 / 0.22** |
+
+Road samples: 40 dev, 35 test (5 marked "can't tell"). Buildings: 40 dev, 38 test; only 5 test buildings are major/destroyed, so building scores carry wide uncertainty.
+
+**Confidence is calibrated:** on the test set, stations with SAM confidence ≥ 0.8 have a mean error of 0.35 m versus 4.06 m at 0.6–0.8, which is why low-confidence stations are flagged for drone reconnaissance.
+
+**Known limitations:** SAM can confidently read sand-covered pavement as clear road (3 dev false-passables). Building grading is the weakest component: the 2017 NAIP "before" image is 1 m resolution and OSM footprints can be offset by several metres; tuning gains on dev did not carry over to test.
+
+**What was tuned on dev:** pavement detected at p ≥ 0.5 but measured over its confident core (p ≥ 0.7), widths capped by OSM road type (typical US curb-to-curb widths, not fitted), and an xBD-strict grading prompt.
+
+--- | :---: | :--- |
 | SAM 3.1 width, median absolute error | **1.95 m** | Mean 3.45 m; bias **+2.2 m** (SAM reads roads too wide) |
 | Debris-blocked cross-sections detected (SAM 0 m where human 0 m) | **7 / 7** | Debris masks are reliable |
 | Passability agreement, ATV / ambulance / fire engine | **78% / 83% / 80%** | False-passable (dangerous): 5 / 3 / 5 of 40 |
