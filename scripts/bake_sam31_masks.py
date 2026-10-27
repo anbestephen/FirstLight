@@ -47,7 +47,12 @@ from src.geometry import (  # noqa: E402
     WGS84_CRS,
     compute_raster_gsd_and_crs,
 )
-from src.sam_measure import SAM_PROMPTS, describe_edge_measurement, measure_edge  # noqa: E402
+from src.sam_measure import (  # noqa: E402
+    SAM_PROMPTS,
+    describe_edge_measurement,
+    max_width_for_highway,
+    measure_edge,
+)
 
 DATA_DIR = PROJECT_ROOT / "data"
 RASTER_PATH = DATA_DIR / "noaa_michael_mexico_beach.tif"
@@ -184,7 +189,7 @@ def main() -> None:
     for (u, v, k), line in lines.items():
         canon = frozenset({(u, v, k), (v, u, k)})
         if canon not in measured:
-            m = measure_edge(line, sampler)
+            m = measure_edge(line, sampler, max_width_m=max_width_for_highway(G[u][v][k].get("highway")))
             record = m.to_dict()
             record["reason"] = describe_edge_measurement(m, gsd)
             pinch = next((st for st in m.stations if abs(st.station_m - m.pinch_station_m) < 1e-6), None)

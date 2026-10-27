@@ -124,3 +124,49 @@ def test_nearest_pavement_run_wins_over_parallel_parking_lot() -> None:
     m, _, _ = measure_station(LINE, 50.0, make_sampler(pavement))
     assert m.clear_width_m == pytest.approx(4.0, abs=0.3)
     assert m.center_offset_m == pytest.approx(0.0)
+
+
+def test_runs_wider_than_the_road_type_cap_are_trimmed_and_flagged() -> None:
+    def parking_lot(x, y):
+        return -12.0 <= y <= 12.0  # 24 m of "pavement": road plus a lot
+
+    m, _, _ = measure_station(LINE, 50.0, make_sampler(parking_lot), max_width_m=10.0)
+    assert m.capped
+    assert m.clear_width_m == pytest.approx(10.0)
+    (x0, y0), (x1, y1) = m.clear_segment_utm
+    assert abs(y1 - y0) == pytest.approx(10.0)
+
+    uncapped, _, _ = measure_station(LINE, 50.0, make_sampler(offset_pavement), max_width_m=10.0)
+    assert not uncapped.capped
+
+
+def test_max_width_for_highway_types() -> None:
+    from src.sam_measure import max_width_for_highway
+
+    assert max_width_for_highway("residential") == 10.0
+    assert max_width_for_highway("primary") == 12.0
+    assert max_width_for_highway(["track", "residential"]) == 10.0
+    assert max_width_for_highway(None) == 10.0
+
+
+def _graded_sampler(road_prob):
+    def sampler(pts: np.ndarray) -> dict[str, np.ndarray]:
+        z = np.zeros(len(pts))
+        return {"road": np.array([road_prob(y) for y in pts[:, 1]]), "debris": z, "water": z}
+
+    return sampler
+
+
+def test_width_is_measured_over_the_confident_core_not_the_blurred_edge() -> None:
+    # 6 m of confident pavement with 1 m of blurred (p=0.6) edge on each side.
+    def road(y):
+        return 0.95 if abs(y) <= 3.0 else (0.6 if abs(y) <= 4.0 else 0.0)
+
+    m, _, _ = measure_station(LINE, 50.0, _graded_sampler(road))
+    assert m.clear_width_m == pytest.approx(6.0, abs=0.3)
+
+
+def test_faint_pavement_without_a_confident_core_keeps_the_road_open() -> None:
+    m, _, _ = measure_station(LINE, 50.0, _graded_sampler(lambda y: 0.6 if abs(y) <= 3.0 else 0.0))
+    assert m.cause == "clear"
+    assert m.clear_width_m == pytest.approx(6.0, abs=0.3)

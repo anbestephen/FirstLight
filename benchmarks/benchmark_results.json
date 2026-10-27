@@ -7,10 +7,10 @@
   "road_widths_sam31": {
     "labeled": 40,
     "cant_tell": 0,
-    "mae_m": 3.453,
-    "median_abs_error_m": 1.945,
-    "rmse_m": 5.656,
-    "bias_m": 2.221,
+    "mae_m": 2.22,
+    "median_abs_error_m": 1.37,
+    "rmse_m": 3.332,
+    "bias_m": 0.533,
     "passability": {
       "atv": {
         "agreement": 0.775,
@@ -23,28 +23,28 @@
         "false_blocked": 4
       },
       "fire_engine": {
-        "agreement": 0.8,
+        "agreement": 0.775,
         "false_passable": 5,
-        "false_blocked": 3
+        "false_blocked": 4
       }
     },
     "confidence_calibration": [
       {
         "confidence": "0.0-0.6",
         "n": 4,
-        "mae_m": 5.015,
+        "mae_m": 4.702,
         "ambulance_agreement": 0.5
       },
       {
         "confidence": "0.6-0.8",
         "n": 8,
-        "mae_m": 4.013,
+        "mae_m": 1.044,
         "ambulance_agreement": 1.0
       },
       {
         "confidence": "0.8-1.0",
         "n": 28,
-        "mae_m": 3.069,
+        "mae_m": 2.201,
         "ambulance_agreement": 0.8214
       }
     ],
@@ -57,42 +57,42 @@
       {
         "sample_id": "road-01",
         "human_width_m": 6.83,
-        "sam_width_m": 6.75,
+        "sam_width_m": 5.0,
         "sam_cause": "clear",
         "sam_confidence": 0.422
       },
       {
         "sample_id": "road-02",
         "human_width_m": 14.85,
-        "sam_width_m": 18.25,
+        "sam_width_m": 8.0,
         "sam_cause": "narrowed_debris",
         "sam_confidence": 0.916
       },
       {
         "sample_id": "road-03",
         "human_width_m": 5.67,
-        "sam_width_m": 8.5,
+        "sam_width_m": 7.75,
         "sam_cause": "clear",
         "sam_confidence": 0.879
       },
       {
         "sample_id": "road-04",
         "human_width_m": 3.34,
-        "sam_width_m": 5.75,
+        "sam_width_m": 5.5,
         "sam_cause": "clear",
         "sam_confidence": 0.911
       },
       {
         "sample_id": "road-05",
         "human_width_m": 3.4,
-        "sam_width_m": 7.5,
+        "sam_width_m": 6.0,
         "sam_cause": "clear",
         "sam_confidence": 0.854
       },
       {
         "sample_id": "road-06",
         "human_width_m": 3.71,
-        "sam_width_m": 4.5,
+        "sam_width_m": 4.0,
         "sam_cause": "clear",
         "sam_confidence": 0.933
       },
@@ -113,7 +113,7 @@
       {
         "sample_id": "road-09",
         "human_width_m": 5.9,
-        "sam_width_m": 7.75,
+        "sam_width_m": 7.25,
         "sam_cause": "clear",
         "sam_confidence": 0.877
       },
@@ -127,7 +127,7 @@
       {
         "sample_id": "road-11",
         "human_width_m": 5.71,
-        "sam_width_m": 7.0,
+        "sam_width_m": 6.75,
         "sam_cause": "clear",
         "sam_confidence": 0.918
       },
@@ -162,14 +162,14 @@
       {
         "sample_id": "road-16",
         "human_width_m": 5.05,
-        "sam_width_m": 7.5,
+        "sam_width_m": 6.75,
         "sam_cause": "clear",
         "sam_confidence": 0.806
       },
       {
         "sample_id": "road-17",
         "human_width_m": 0.0,
-        "sam_width_m": 1.75,
+        "sam_width_m": 1.25,
         "sam_cause": "narrowed_debris",
         "sam_confidence": 0.899
       },
@@ -183,7 +183,7 @@
       {
         "sample_id": "road-19",
         "human_width_m": 7.01,
-        "sam_width_m": 18.0,
+        "sam_width_m": 10.0,
         "sam_cause": "narrowed_debris",
         "sam_confidence": 0.69
       },
@@ -197,7 +197,7 @@
       {
         "sample_id": "road-21",
         "human_width_m": 5.46,
-        "sam_width_m": 6.25,
+        "sam_width_m": 6.0,
         "sam_cause": "narrowed_debris",
         "sam_confidence": 0.798
       },
@@ -211,42 +211,42 @@
       {
         "sample_id": "road-23",
         "human_width_m": 4.44,
-        "sam_width_m": 4.0,
+        "sam_width_m": 3.5,
         "sam_cause": "clear",
         "sam_confidence": 0.927
       },
       {
         "sample_id": "road-24",
         "human_width_m": 7.11,
-        "sam_width_m": 9.0,
+        "sam_width_m": 8.5,
         "sam_cause": "narrowed_debris",
         "sam_confidence": 0.719
       },
       {
         "sample_id": "road-25",
         "human_width_m": 6.6,
-        "sam_width_m": 21.75,
+        "sam_width_m": 8.0,
         "sam_cause": "narrowed_debris",
         "sam_confidence": 0.793
       },
       {
         "sample_id": "road-26",
         "human_width_m": 6.47,
-        "sam_width_m": 7.75,
+        "sam_width_m": 7.25,
         "sam_cause": "clear",
         "sam_confidence": 0.766
       },
       {
         "sample_id": "road-27",
         "human_width_m": 6.67,
-        "sam_width_m": 7.75,
+        "sam_width_m": 7.5,
         "sam_cause": "clear",
         "sam_confidence": 0.946
       },
       {
         "sample_id": "road-28",
         "human_width_m": 3.78,
-        "sam_width_m": 8.25,
+        "sam_width_m": 7.75,
         "sam_cause": "clear",
         "sam_confidence": 0.807
       },
@@ -260,21 +260,21 @@
       {
         "sample_id": "road-30",
         "human_width_m": 3.3,
-        "sam_width_m": 5.5,
+        "sam_width_m": 5.0,
         "sam_cause": "narrowed_debris",
         "sam_confidence": 0.92
       },
       {
         "sample_id": "road-31",
         "human_width_m": 0.0,
-        "sam_width_m": 5.25,
+        "sam_width_m": 4.5,
         "sam_cause": "clear",
         "sam_confidence": 0.908
       },
       {
         "sample_id": "road-32",
         "human_width_m": 0.0,
-        "sam_width_m": 2.0,
+        "sam_width_m": 1.25,
         "sam_cause": "clear",
         "sam_confidence": 0.635
       },
@@ -288,7 +288,7 @@
       {
         "sample_id": "road-34",
         "human_width_m": 0.0,
-        "sam_width_m": 9.25,
+        "sam_width_m": 8.75,
         "sam_cause": "clear",
         "sam_confidence": 0.894
       },
@@ -302,7 +302,7 @@
       {
         "sample_id": "road-36",
         "human_width_m": 9.43,
-        "sam_width_m": 30.25,
+        "sam_width_m": 10.0,
         "sam_cause": "clear",
         "sam_confidence": 0.976
       },
@@ -323,14 +323,14 @@
       {
         "sample_id": "road-39",
         "human_width_m": 5.25,
-        "sam_width_m": 10.75,
+        "sam_width_m": 10.25,
         "sam_cause": "clear",
         "sam_confidence": 0.865
       },
       {
         "sample_id": "road-40",
         "human_width_m": 5.78,
-        "sam_width_m": 15.0,
+        "sam_width_m": 12.0,
         "sam_cause": "clear",
         "sam_confidence": 0.44
       }

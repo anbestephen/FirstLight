@@ -44,7 +44,11 @@ SAM_PROMPTS: dict[str, str] = {
 STATION_INTERVAL_M = 5.0
 RAY_HALF_WIDTH_M = 15.0
 RAY_SAMPLE_STEP_M = 0.25
+# Pavement is *detected* at p >= 0.5, but its width is measured over the run's confident core
+# (p >= 0.7): SAM's 288-cell maps are upsampled onto 504 px tiles, so edges blur ~0.5 m per
+# side. A detected run with no confident core keeps its 0.5 width so faint roads stay open.
 PAVEMENT_THRESHOLD = 0.5
+PAVEMENT_CORE_THRESHOLD = 0.7
 MAX_CENTER_OFFSET_M = 10.0
 ENDPOINT_MARGIN_M = 2.5
 CAUSE_WINDOW_M = 5.0
@@ -52,6 +56,20 @@ DEBRIS_CAUSE_THRESHOLD = 0.4
 WATER_CAUSE_THRESHOLD = 0.5
 DRONE_RECON_CONFIDENCE = 0.6
 THRESHOLD_BAND_M = 0.35
+
+# Physical upper bound on clear width by OSM highway type (typical US curb-to-curb width
+# including shoulders). A wider SAM run is a parking lot, intersection or open sand.
+ROAD_TYPE_MAX_WIDTH_M: dict[str, float] = {
+    "primary": 12.0,
+    "secondary": 12.0,
+    "tertiary": 11.0,
+    "residential": 10.0,
+    "unclassified": 10.0,
+    "service": 8.0,
+    "footway": 6.0,
+    "track": 6.0,
+}
+DEFAULT_MAX_WIDTH_M = 10.0
 
 # (n_points, 2) UTM xy -> {"road": p[], "debris": p[], "water": p[]} in [0, 1]
 ProbabilitySampler = Callable[[np.ndarray], dict[str, np.ndarray]]
@@ -69,6 +87,7 @@ class StationMeasurement:
     center_offset_m: float | None
     cause: str  # "clear" | "narrowed_debris" | "debris" | "water" | "not_visible"
     confidence: float
+    capped: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -84,6 +103,7 @@ class StationMeasurement:
             "center_offset_m": None if self.center_offset_m is None else round(self.center_offset_m, 2),
             "cause": self.cause,
             "confidence": round(self.confidence, 3),
+            "capped": self.capped,
         }
 
 
@@ -115,6 +135,12 @@ class EdgeMeasurement:
             "not_visible_stations": self.not_visible_stations,
             "stations": [s.to_dict() for s in self.stations],
         }
+
+
+def max_width_for_highway(highway: Any) -> float:
+    """Road-type width cap; OSM may give a list of types, in which case the widest applies."""
+    types = highway if isinstance(highway, list) else [highway]
+    return max(ROAD_TYPE_MAX_WIDTH_M.get(str(t), DEFAULT_MAX_WIDTH_M) for t in types)
 
 
 def station_positions(length_m: float, interval_m: float = STATION_INTERVAL_M) -> list[float]:
@@ -162,8 +188,12 @@ def measure_station(
     *,
     half_width_m: float = RAY_HALF_WIDTH_M,
     step_m: float = RAY_SAMPLE_STEP_M,
+    max_width_m: float | None = None,
 ) -> tuple[StationMeasurement, dict[str, np.ndarray], np.ndarray]:
-    """Measure one cross-section; also returns the raw samples for area integration."""
+    """
+    Measure one cross-section; also returns the raw samples for area integration. Runs wider
+    than `max_width_m` are trimmed symmetrically about their middle and flagged `capped`.
+    """
     center = line.interpolate(station_m)
     nx_, ny_ = _unit_normal(line, station_m)
     offsets = np.arange(-half_width_m, half_width_m + 1e-9, step_m)
@@ -189,7 +219,15 @@ def measure_station(
     ray = ((float(pts[0, 0]), float(pts[0, 1])), (float(pts[-1, 0]), float(pts[-1, 1])))
     if candidates:
         dist, _, a, b, lo, hi = min(candidates)
+        core = np.nonzero(road[a : b + 1] >= PAVEMENT_CORE_THRESHOLD)[0]
+        if core.size:
+            lo, hi = offsets[a + core[0]] - step_m / 2.0, offsets[a + core[-1]] + step_m / 2.0
         width = float(hi - lo)
+        capped = max_width_m is not None and width > max_width_m
+        if capped:
+            mid = (lo + hi) / 2.0
+            lo, hi = mid - max_width_m / 2.0, mid + max_width_m / 2.0
+            width = float(max_width_m)
         seg = (
             (center.x + lo * nx_, center.y + lo * ny_),
             (center.x + hi * nx_, center.y + hi * ny_),
@@ -208,6 +246,7 @@ def measure_station(
             center_offset_m=float(dist if lo > 0 else -dist),
             cause="narrowed_debris" if narrowed else "clear",
             confidence=confidence,
+            capped=capped,
         )
     else:
         if water_near >= WATER_CAUSE_THRESHOLD:
@@ -252,13 +291,16 @@ def measure_edge(
     interval_m: float = STATION_INTERVAL_M,
     half_width_m: float = RAY_HALF_WIDTH_M,
     step_m: float = RAY_SAMPLE_STEP_M,
+    max_width_m: float | None = None,
 ) -> EdgeMeasurement:
     """Measure a UTM road centerline against SAM 3.1 probability maps."""
     stations: list[StationMeasurement] = []
     debris_area = 0.0
     water_area = 0.0
     for s in station_positions(line.length, interval_m):
-        m, probs, offsets = measure_station(line, s, sampler, half_width_m=half_width_m, step_m=step_m)
+        m, probs, offsets = measure_station(
+            line, s, sampler, half_width_m=half_width_m, step_m=step_m, max_width_m=max_width_m
+        )
         stations.append(m)
         # Integrate SAM debris/water pixels within ±5 m of the road over this station's
         # 5 m slice: area ~= (#samples above threshold) * step * interval.
