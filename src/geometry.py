@@ -1158,6 +1158,64 @@ class SAM31GeometricInstrument:
 
         return results
 
+    def segment_tile_probabilities(
+        self,
+        image: Any,
+        prompts: dict[str, str],
+        *,
+        instance_score_threshold: float = 0.4,
+    ) -> dict[str, np.ndarray]:
+        """
+        Run SAM 3.1 once per tile (shared vision features) and return a float32 probability
+        map `(H, W)` per prompt key: the max of the semantic map and every instance mask
+        whose query score exceeds `instance_score_threshold`, gated by SAM 3's presence
+        score for that concept in the tile, upsampled to the tile size. Without the presence
+        gate the dense semantic map can saturate across tiles that contain no such object.
+        """
+        import torch
+        import torch.nn.functional as F
+        from PIL import Image
+
+        pil_img = (
+            image.convert("RGB")
+            if isinstance(image, Image.Image)
+            else Image.fromarray(image).convert("RGB")
+        )
+        width_px, height_px = pil_img.size
+        model, processor = self.load_model()
+        pixel_values = processor(images=pil_img, return_tensors="pt")["pixel_values"].to(
+            self.device, dtype=torch.float16
+        )
+
+        maps: dict[str, np.ndarray] = {}
+        with torch.no_grad():
+            vision_embeds = model.get_vision_features(pixel_values)
+            for key, prompt in prompts.items():
+                txt = processor(text=prompt, return_tensors="pt")
+                out = model(
+                    vision_embeds=vision_embeds,
+                    input_ids=txt["input_ids"].to(self.device),
+                    attention_mask=txt["attention_mask"].to(self.device),
+                )
+                prob = out.semantic_seg.float().sigmoid()  # [1, 1, h, w]
+                scores = out.pred_logits.float().sigmoid()[0]
+                keep = scores > instance_score_threshold
+                if bool(keep.any()):
+                    inst = out.pred_masks[:, keep].float().sigmoid().max(dim=1, keepdim=True).values
+                    prob = torch.maximum(prob, inst)
+                presence_logits = getattr(out, "presence_logits", None)
+                if presence_logits is not None:
+                    prob = prob * presence_logits.float().sigmoid().max()
+                maps[key] = (
+                    F.interpolate(
+                        prob, size=(height_px, width_px), mode="bilinear", align_corners=False
+                    )[0, 0]
+                    .cpu()
+                    .numpy()
+                    .astype(np.float32)
+                )
+        return maps
+
     def unload_weights(self) -> None:
         """Explicitly release MPS unified memory cache."""
         import torch

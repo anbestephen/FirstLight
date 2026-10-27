@@ -405,7 +405,8 @@ def test_milestone7_benchmark_tiers_and_visual_storytelling_ui() -> None:
         assert b_data["edge_id"] == edge_id
         assert b_data["force_offline"] is offline_flag
         assert b_data["memory_cleared"] is True
-        assert b_data["min_clear_width_m"] > 0
+        # A road fully buried in debris is a valid choke point with 0.0 m of visible pavement.
+        assert b_data["min_clear_width_m"] >= 0
         assert "latency_ms" in b_data
         assert "tier_status" in b_data
         assert "damage_severity" in b_data

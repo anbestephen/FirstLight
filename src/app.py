@@ -53,6 +53,7 @@ from src.geometry import (
 from src.routing import (
     VEHICLE_MIN_WIDTH_M,
     _format_edge_name,
+    load_sam31_measurements,
     assign_buildings_to_graph_nodes,
     compute_multi_class_routes,
     compute_shortest_route,
@@ -62,6 +63,7 @@ from src.routing import (
     rank_choke_point_clearance_roi,
     simulate_choke_point_clearance,
 )
+from src.sam_measure import build_caliper_geojson_from_measurement
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
@@ -74,6 +76,7 @@ ROADS_GEOJSON_PATH = DATA_DIR / "osm_roads.geojson"
 BUILDINGS_GEOJSON_PATH = DATA_DIR / "osm_buildings.geojson"
 BUILDINGS_GRADED_GEOJSON_PATH = DATA_DIR / "osm_buildings_graded.geojson"
 SAM31_MASKS_GEOJSON_PATH = DATA_DIR / "sam31_mexico_beach_masks.geojson"
+SAM31_MEASUREMENTS_PATH = DATA_DIR / "sam31_edge_measurements.json"
 RASTER_TIF_PATH = DATA_DIR / "noaa_michael_mexico_beach.tif"
 
 
@@ -172,6 +175,7 @@ class FirstLightState:
         self.cleared_edges: list[tuple[int | str, int | str, int]] = []
         self.raster_meta: dict[str, Any] | None = None
         self.sim_masks_utm: dict[str, Any] | None = None
+        self.sam_measurements: dict[str, Any] | None = None
         self.buildings_features: list[dict[str, Any]] | None = None
         self.raster_preview_png: bytes | None = None
         self.dispatch = DispatchHub(
@@ -236,12 +240,17 @@ class FirstLightState:
             else BUILDINGS_GEOJSON_PATH
         )
 
+        use_measurements = not self.use_simulated_masks and SAM31_MEASUREMENTS_PATH.exists()
+        self.sam_measurements = (
+            load_sam31_measurements(SAM31_MEASUREMENTS_PATH) if use_measurements else None
+        )
         G = load_annotated_routing_graph(
             graphml_path=GRAPHML_PATH,
             roads_geojson_path=ROADS_GEOJSON_PATH,
             raster_path=RASTER_TIF_PATH,
             masks_geojson_path=None if self.use_simulated_masks else SAM31_MASKS_GEOJSON_PATH,
             simulate_if_no_masks=self.use_simulated_masks,
+            measurements_path=SAM31_MEASUREMENTS_PATH if use_measurements else None,
         )
         G = assign_buildings_to_graph_nodes(G, buildings_source=active_buildings_path)
 
@@ -1083,6 +1092,22 @@ def get_choke_point_caliper(edge_id: str) -> dict[str, Any]:
     needs_drone = bool(edata.get("needs_drone_recon", sam_conf < 0.70))
     mask_src = str(edata.get("mask_source", "sam-3.1"))
     canonical_edge_id = f"{u}-{v}-{k}"
+
+    measured = (state.sam_measurements or {}).get("edges", {}).get(canonical_edge_id)
+    if measured is not None:
+        caliper_fc = build_caliper_geojson_from_measurement(
+            measured,
+            centerline_utm,
+            state.sim_masks_utm,
+            edge_id=canonical_edge_id,
+            u=u,
+            v=v,
+            name=road_name,
+            gsd_m_per_px=gsd_m_per_px,
+            simulated_clearance=is_cleared,
+        )
+        state.meta_suite.record_model_invocation("sam-3.1", 0.0, "baked_mps_fp16")
+        return caliper_fc
 
     caliper_fc = build_edge_caliper_geojson(
         centerline_utm=centerline_utm,

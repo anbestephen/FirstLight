@@ -23,7 +23,7 @@
   2. **OpenStreetMap (OSM) Vector Topology:** Public road network (`data/osm_road_graph.graphml`, `data/osm_roads.geojson`, 312 road edges) and building footprints (`data/osm_buildings.geojson`, 334 structures) for Mexico Beach, FL.
   3. **Pre-Trained Meta AI Weights & APIs:** Local **Meta SAM 3.1** (`models/sam3.1/model.safetensors`, `Sam3Model` in `float16`), local 4-bit quantized **Meta Llama 3.2 11B Vision Instruct** (`models/Llama-3.2-11B-Vision-Instruct-4bit`), and live **Meta Model API** endpoints (`muse-spark-1.3`, `muse-wonder-1.0`, `muse-voice-transcribe-1.0`, `muse-image-1.0`).
   4. **Real Model-Generated GeoJSON Artifacts Baked During Hackathon:**
-     * `data/sam31_mexico_beach_masks.geojson` — **147 obstacle polygons** (101 debris masks, 46 standing-water masks) extracted by running `Sam3Model` (`models/sam3.1`) on Apple Silicon MPS (`torch.float16`) across the NOAA GeoTIFF via [`scripts/bake_sam31_masks.py`](scripts/bake_sam31_masks.py).
+     * `data/sam31_edge_measurements.json` + `data/sam31_mexico_beach_masks.geojson` — real SAM 3.1 output: `Sam3Model` (`models/sam3.1`, `torch.float16` on Apple Silicon MPS) run on all 89 road tiles of the NOAA GeoTIFF with the text prompts `road`, `debris` and `standing water` (presence-gated), giving visible-pavement widths for all 158 roads and 1,218 mask polygons. Rebuild with [`scripts/bake_sam31_masks.py`](scripts/bake_sam31_masks.py) (~5 min on M1 Max).
      * `data/osm_buildings_graded.geojson` — **334 building footprints** graded for post-hurricane structural severity (`61 destroyed`, `64 major_damage`, `106 minor_damage`, `103 no_damage`) via live `muse-spark-1.3` multimodal vision calls on 10 sector aerial crops in [`scripts/grade_buildings_muse_spark.py`](scripts/grade_buildings_muse_spark.py).
 
 ---
@@ -53,7 +53,7 @@ flowchart TD
     end
 
     subgraph Caliper["2. SAM 3.1 Geometric Measurement Instrument (src/geometry.py)"]
-        SAM["SAM 3.1 (PyTorch MPS fp16)\nmodels/sam3.1/model.safetensors\ndata/sam31_mexico_beach_masks.geojson (147 polygons)"]
+        SAM["SAM 3.1 (PyTorch MPS fp16)\nprompts: road / debris / standing water\ndata/sam31_edge_measurements.json (158 roads)"]
         RAY["5.0m Orthogonal Cross-Section Raycaster\nCasts 20m Normal Rays Along Road Centerlines\nComputes Contiguous Clear Span + Drone Recon Flags"]
     end
 
@@ -93,7 +93,7 @@ FirstLight orchestrates **all six models** from the Meta AI ecosystem via [`Meta
 
 | # | Meta AI Model ID | System Role in FirstLight | Primary Execution Target | Air-Gap / Comms Blackout Fallback (`force_offline=True`) | API Endpoint |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **1** | **`sam-3.1`** | **Geometric Measurement Instrument:** Segments post-storm road debris and standing water polygons (`147` polygons in `data/sam31_mexico_beach_masks.geojson`), projected to `EPSG:32616` (`0.2804 m/px`) for `5.0 m` orthogonal caliper raycasting and confidence-based drone recon flagging. | Local Apple Silicon PyTorch MPS (`float16` safetensors in `models/sam3.1/`) | Runs 100% locally on M1 Max GPU (`fp16`) + baked vector mask cache (`mean_sam_confidence = 0.7355`). | `GET /api/choke-point/{edge_id}/caliper` |
+| **1** | **`sam-3.1`** | **Geometric Measurement Instrument:** Segments visible pavement, debris and standing water on every road tile (prompts `road`, `debris`, `standing water`), then measures the clear pavement width in metres every `5.0 m` along all 158 roads (`0.2804 m/px`, `EPSG:32616`), flagging roads where no pavement is visible for drone reconnaissance. | Local Apple Silicon PyTorch MPS (`float16` safetensors in `models/sam3.1/`) | Runs 100% locally; results baked to `data/sam31_edge_measurements.json` so the field laptop needs no GPU work at demo time. | `GET /api/choke-point/{edge_id}/caliper` |
 | **2** | **`muse-spark-1.3`** | **Corridor & Structural Damage Grader:** Evaluates `256×256` NOAA aerial patches and grades all `334` Mexico Beach buildings (`data/osm_buildings_graded.geojson`) into canonical 4-class severity (`no_damage`, `minor_damage`, `major_damage`, `destroyed`). | Meta Model API (`https://api.meta.ai/v1/chat/completions`, `max_tokens=2048`) | Automatic circuit-breaker failover to **Tier 2 (`open-weight-mlx-4bit`)** and **Tier 3 (`[DETERMINISTIC SAM/GEOMETRY FALLBACK]`)**. | `POST /api/assess` |
 | **3** | **`muse-wonder-1.0`** | **Incident Commander Strategic Triage Advisor:** Synthesizes top Choke-Point Clearance ROI bottlenecks into an executive multi-corridor action plan assigning loaders vs. skid-steers across Mexico Beach sectors. | Meta Model API (`https://api.meta.ai/v1/chat/completions`, `max_tokens=2048`) | Deterministic geometric triage explicitly labeled `[DETERMINISTIC GEOMETRIC TRIAGE — NO LLM EXECUTED]`. | `POST /api/incident-briefing` |
 | **4** | **`muse-voice-transcribe-1.0`** | **Tactical Hands-Free Radio Dispatch:** Transcribes and parses field radio commands (e.g., *"Dispatch Fire Engine and simulate clearing top choke point on US Highway 98"*) into structured UI actions. | Meta Model API (`https://api.meta.ai/v1/chat/completions`) | Deterministic regex command intent parser explicitly labeled `[DETERMINISTIC REGEX DISPATCH — NO ASR MODEL EXECUTED]`. | `POST /api/voice-dispatch` |
@@ -113,12 +113,12 @@ Geographic coordinates (`EPSG:4326` degrees) distort linear distances and angles
    $$\text{GSD} = 0.2804\text{ meters/pixel} \quad \left(1\text{ pixel}^2 = 0.078624\text{ m}^2\right)$$
 
 ### 4.2 Orthogonal `5.0 m` Cross-Section Raycasting & Drone Recon Flagging
-Rather than treating segmentation as a whole-road label, [`evaluate_road_edge_geometry`](src/geometry.py) marches along each road centerline at $\Delta s = 5.0\text{ m}$ intervals (`station_m`):
+Rather than treating segmentation as a whole-road label, [`measure_edge`](src/sam_measure.py) marches along each road centerline at $\Delta s = 5.0\text{ m}$ intervals (`station_m`), sampling SAM 3.1's per-pixel probability maps:
 1. At each station $s_i$, it computes the unit tangent vector $\hat{t}_i = (\Delta x, \Delta y) / \|\Delta \mathbf{p}\|$ and orthogonal unit normal $\hat{n}_i = (-\hat{t}_{i,y}, \hat{t}_{i,x})$.
-2. It casts an orthogonal cross-section ray of total length $L = 20.0\text{ m}$ ($\pm 10.0\text{ m}$ from centerline), clipped to the road corridor surface polygon, and subtracts intersecting **SAM 3.1 debris polygons** ($\mathcal{M}_{\text{debris}}$).
-3. **Split-Debris Contiguous Lane Rule:** If rubble sits in the center of a road and splits the cross-section into two narrow shoulders (a `MultiLineString`), a vehicle cannot straddle the rubble pile. FirstLight takes the **maximum single contiguous clear sub-segment** at station $s_i$, and defines the edge's bottleneck width as the minimum across all stations:
-   $$w_{\text{clear}}(e) = \min_{s_i \in e} \left( \max_{c \in \text{segments}(R(s_i) \setminus \mathcal{M}_{\text{debris}})} \text{length}(c) \right)$$
-4. **SAM 3.1 Confidence & Automated Drone Recon Flag (`needs_drone_recon`):** Each road segment aggregates the confidence score (`sam_confidence`) of intersecting `sam-3.1` obstacle masks. Segments with `sam_confidence < 0.72` or borderline pinch widths ($\pm 0.35\text{ m}$ of a vehicle class threshold) are automatically flagged with `needs_drone_recon = True` (`[ DRONE RECON FLAGGED: Low Confidence / Canopy Occlusion ]`) in the UI Inspector Dock.
+2. It casts an orthogonal cross-section ray of total length $L = 30.0\text{ m}$ ($\pm 15.0\text{ m}$), sampled every $0.25\text{ m}$. The clear width is the contiguous run of SAM `road` pixels ($p \ge 0.5$) **nearest the OSM centerline**, which absorbs the few-metre misalignment between OSM and the imagery.
+3. **Sustained Bottleneck Rule:** Debris on the pavement removes `road` pixels, splitting or narrowing the run; a vehicle cannot straddle rubble, so only the nearest contiguous run counts. An obstruction must persist over two consecutive stations before it sets the edge's bottleneck width, so a single parked car or shadow cannot close a road:
+   $$w_{\text{clear}}(e) = \min_{i} \; \max\big(w(s_i),\, w(s_{i+1})\big)$$
+4. **Cause & Drone Recon Flag (`needs_drone_recon`):** Where no pavement is visible, the gap is attributed to SAM `standing water` (impassable for every vehicle), SAM `debris` (clearable — feeds the Choke-Point ROI queue), or *not visible* (canopy, shadow or burial — treated as impassable). Roads with a not-visible bottleneck, mean pavement certainty $< 0.6$, or a width within $\pm 0.35\text{ m}$ of a vehicle threshold are flagged `needs_drone_recon = True` in the UI.
 
 ### 4.3 Multi-Class Vehicle Passability & Standing Water Infinite-Weight Rule
 In [`src/routing.py`](src/routing.py), each directed edge $e = (u, v, k)$ in the NetworkX `MultiDiGraph` is assigned class-specific traversal weights $W(e, \text{class})$:
@@ -217,7 +217,8 @@ FirstLight/
 │   └── benchmark_results.json # Saved MAE (0.1587m), RMSE (0.2067m), and F1 (0.9655) metrics
 ├── data/                      # 100% locally cached Mexico Beach, FL (Hurricane Michael) datasets
 │   ├── noaa_michael_mexico_beach.tif     # Post-event NOAA GeoTIFF (0.2804 m/px GSD in EPSG:32616)
-│   ├── sam31_mexico_beach_masks.geojson  # 147 real SAM 3.1 obstacle masks baked on M1 Max MPS
+│   ├── sam31_edge_measurements.json      # SAM 3.1 per-road stations, widths, causes, confidence
+│   ├── sam31_mexico_beach_masks.geojson  # 1,218 SAM 3.1 pavement/debris/water polygons near roads
 │   ├── osm_buildings_graded.geojson      # 334 buildings graded by live Muse Spark 1.3 vision calls
 │   ├── ground_truth_benchmark.json       # 15 reference road cross-sections & 30 reference buildings
 │   ├── osm_road_graph.graphml            # Cached OSM road network (125 nodes, 312 edges)
@@ -228,7 +229,7 @@ FirstLight/
 │   └── Llama-3.2-11B-Vision-Instruct-4bit/  # 4-bit quantized MLX VLM weights
 ├── scripts/                   # Reproducible asset verification & offline model baking scripts
 │   ├── setup_data_and_models.py          # --check and --download verification tool for judges
-│   ├── bake_sam31_masks.py               # Runs Sam3Model (fp16 MPS) across the NOAA GeoTIFF
+│   ├── bake_sam31_masks.py               # Runs Sam3Model (fp16 MPS) on every road tile, measures all roads
 │   └── grade_buildings_muse_spark.py     # Grades all 334 OSM buildings via Muse Spark 1.3 API
 ├── src/
 │   ├── geometry.py            # EPSG:32616 projection, SAM 3.1 masks, 5m orthogonal caliper raycaster

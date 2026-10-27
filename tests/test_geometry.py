@@ -277,6 +277,7 @@ def test_real_mexico_beach_osm_reprojection_and_network_evaluation() -> None:
         roads_source=subset_gdf,
         raster_path=raster_path,
         sampling_interval_m=5.0,
+        masks_geojson_path=None,
         simulate_if_no_masks=True,
     )
 

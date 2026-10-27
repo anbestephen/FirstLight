@@ -453,6 +453,14 @@
         dashArray: "3, 3",
       };
     }
+    if (fp.feature_type === "road_surface_mask") {
+      return {
+        color: "#38bdf8",
+        fillColor: "#38bdf8",
+        weight: 1,
+        fillOpacity: 0.22,
+      };
+    }
     if (fp.feature_type === "debris_mask") {
       return {
         color: "#ea580c",
@@ -479,10 +487,24 @@
     const fp = feature.properties || {};
     if (fp.feature_type === "caliper_ray") {
       const badge = fp.is_pinch_point ? " [MIN PINCH POINT]" : "";
+      const causeLabel = {
+        clear: "visible pavement",
+        narrowed_debris: "pavement narrowed by debris",
+        debris: "pavement buried by debris",
+        water: "standing water",
+        not_visible: "no pavement visible &mdash; verify by drone",
+      }[fp.cause];
       layer.bindTooltip(
         `<strong>5m Caliper Ray @ ${fp.station_m}m${badge}</strong><br/>` +
-        `Clear Width: <strong>${fp.clear_width_m}m</strong><br/>` +
+        `Clear Width: <strong>${fp.clear_width_m}m</strong>` +
+        (causeLabel ? ` (${causeLabel})` : "") +
+        `<br/>` +
         `ATV: ${fp.atv ? "PASS" : "BLOCKED"} | Amb: ${fp.ambulance ? "PASS" : "BLOCKED"} | Fire: ${fp.fire_engine ? "PASS" : "BLOCKED"}`,
+        { sticky: true }
+      );
+    } else if (fp.feature_type === "road_surface_mask") {
+      layer.bindTooltip(
+        `<strong>SAM 3.1 Visible Pavement</strong><br/>Prompt: "road" (GSD: ${fp.gsd_m_per_px} m/px)`,
         { sticky: true }
       );
     } else if (fp.feature_type === "debris_mask") {

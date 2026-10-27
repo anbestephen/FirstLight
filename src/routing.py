@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import json
 import math
 from pathlib import Path
 from typing import Any, Literal
@@ -321,6 +322,48 @@ def annotate_graph_with_geometry_metrics(
     return G
 
 
+def load_sam31_measurements(path: str | Path) -> dict[str, Any]:
+    """Load `data/sam31_edge_measurements.json` (baked SAM 3.1 per-edge measurements)."""
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def apply_sam31_measurements(G: nx.MultiDiGraph, payload: dict[str, Any]) -> None:
+    """
+    Annotate graph edges in place from baked SAM 3.1 measurements. `nominal_width_m` (the
+    width restored by a simulated debris clearance) is the median visible pavement width
+    SAM measured on the unobstructed stations of that same road.
+    """
+    gsd = float(payload.get("gsd_m_per_px", 0.2804))
+    edges = payload.get("edges", {})
+    default_nominal = DEFAULT_NOMINAL_ROAD_HALF_WIDTH_M * 2.0
+    for u, v, k, data in G.edges(keys=True, data=True):
+        rec = edges.get(f"{u}-{v}-{int(k)}")
+        if rec is None:
+            data["mask_source"] = "unmeasured"
+            data["needs_drone_recon"] = True
+            continue
+        clear_widths = [st["clear_width_m"] for st in rec["stations"] if st["cause"] == "clear"]
+        nominal_w = float(np.median(clear_widths)) if clear_widths else default_nominal
+        length_m = float(rec["length_m"])
+        has_water = bool(rec["has_water_obstruction"])
+        water_ratio = (
+            max(float(rec["water_area_m2"]) / max(length_m * nominal_w, 1.0), 0.01) if has_water else 0.0
+        )
+        data["length_m"] = length_m
+        data["nominal_width_m"] = round(nominal_w, 2)
+        data["min_clear_width_m"] = float(rec["min_clear_width_m"])
+        data["water_overlap_ratio"] = water_ratio
+        data["has_water_obstruction"] = has_water
+        data["debris_area_sqm"] = float(rec["debris_area_m2"])
+        data["water_area_m2"] = float(rec["water_area_m2"])
+        data["gsd_m_per_px"] = gsd
+        data["bottleneck_lonlat"] = rec.get("bottleneck_lonlat")
+        data["sam_confidence"] = float(rec["sam_confidence"])
+        data["needs_drone_recon"] = bool(rec["needs_drone_recon"])
+        data["mask_source"] = str(payload.get("mask_source", "sam-3.1"))
+        data["clearance_reason"] = str(rec.get("reason", ""))
+
+
 def load_annotated_routing_graph(
     graphml_path: str | Path = "data/osm_road_graph.graphml",
     roads_geojson_path: str | Path | None = "data/osm_roads.geojson",
@@ -328,12 +371,16 @@ def load_annotated_routing_graph(
     *,
     masks_geojson_path: str | Path | None = "data/sam31_mexico_beach_masks.geojson",
     simulate_if_no_masks: bool = False,
+    measurements_path: str | Path | None = "data/sam31_edge_measurements.json",
 ) -> nx.MultiDiGraph:
     """
-    Load the cached OpenStreetMap road graph (`data/osm_road_graph.graphml`), run
-    cross-sectional clearance measurement via `src/geometry.py`, and annotate every
-    graph edge with `min_clear_width_m`, `water_overlap_ratio`, `debris_area_sqm`,
+    Load the cached OpenStreetMap road graph (`data/osm_road_graph.graphml`) and annotate
+    every edge with `min_clear_width_m`, `water_overlap_ratio`, `debris_area_sqm`,
     `sam_confidence`, `needs_drone_recon`, and vehicle-specific edge weights.
+
+    When `measurements_path` exists (baked by `scripts/bake_sam31_masks.py`), the real
+    SAM 3.1 visible-pavement measurements are used; otherwise widths are computed from
+    `masks_geojson_path` polygons via `src/geometry.py`.
     """
     G = ox.load_graphml(Path(graphml_path))
 
@@ -343,6 +390,10 @@ def load_annotated_routing_graph(
             node_data["x"] = float(node_data["x"])
         if "y" in node_data:
             node_data["y"] = float(node_data["y"])
+
+    if measurements_path is not None and Path(measurements_path).exists():
+        apply_sam31_measurements(G, load_sam31_measurements(measurements_path))
+        return annotate_graph_with_geometry_metrics(G)
 
     nodes_gdf, edges_gdf = ox.graph_to_gdfs(G)
     edges_reset = edges_gdf.reset_index()

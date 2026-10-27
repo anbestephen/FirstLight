@@ -1,241 +1,275 @@
 """
-Bake real SAM 3.1 segmentation masks (`road`, `debris`, `standing water`) across the
-Mexico Beach Hurricane Michael aerial imagery (`data/noaa_michael_mexico_beach.tif`)
-into `data/sam31_mexico_beach_masks.geojson`.
+Bake real SAM 3.1 measurements for every Mexico Beach road (`scripts/bake_sam31_masks.py`).
+
+1. Tile the NOAA Hurricane Michael GeoTIFF along the OSM road network (504 px tiles,
+   32 px overlap) and run SAM 3.1 once per tile with the text prompts "road", "debris"
+   and "standing water" (fp16 on Apple Silicon MPS).
+2. Mosaic the per-pixel probabilities into `data/sam31_probabilities.tif` (3 x uint8 bands,
+   same grid as the imagery) so measurements can be re-run without SAM.
+3. Measure visible-pavement clear width along every OSM edge with `src/sam_measure.py` and
+   write `data/sam31_edge_measurements.json` (per-edge stations, widths, causes, confidence).
+4. Vectorise the masks near roads into `data/sam31_mexico_beach_masks.geojson` for display.
+
+Every polygon and width in the outputs comes from SAM 3.1 pixels; nothing is placed by rule.
+
+Usage:
+  .venv/bin/python scripts/bake_sam31_masks.py               # full bake (runs SAM)
+  .venv/bin/python scripts/bake_sam31_masks.py --remeasure   # reuse sam31_probabilities.tif
 """
 
 from __future__ import annotations
 
+import argparse
 import json
-import math
 from pathlib import Path
 import sys
 import time
 from typing import Any
 
-import geopandas as gpd
 import numpy as np
+import osmnx as ox
 from PIL import Image
 from pyproj import Transformer
 import rasterio
+from rasterio.features import rasterize, shapes as raster_shapes
 from rasterio.windows import Window
-from shapely.geometry import LineString, MultiLineString, Polygon, mapping
-from shapely.ops import transform as shapely_transform
+from scipy import ndimage
+from shapely.geometry import LineString, mapping, shape
+from shapely.ops import transform as shapely_transform, unary_union
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.geometry import (
-    DEFAULT_NOMINAL_ROAD_HALF_WIDTH_M,
-    DEFAULT_SAMPLING_INTERVAL_M,
+from src.geometry import (  # noqa: E402
     SAM31GeometricInstrument,
     TARGET_METRIC_CRS,
     WGS84_CRS,
-    _make_oriented_road_patch,
     compute_raster_gsd_and_crs,
-    load_and_align_roads,
-    mask_array_to_utm_polygons,
 )
+from src.sam_measure import SAM_PROMPTS, describe_edge_measurement, measure_edge  # noqa: E402
+
+DATA_DIR = PROJECT_ROOT / "data"
+RASTER_PATH = DATA_DIR / "noaa_michael_mexico_beach.tif"
+GRAPHML_PATH = DATA_DIR / "osm_road_graph.graphml"
+PROB_TIF_PATH = DATA_DIR / "sam31_probabilities.tif"
+MEASUREMENTS_PATH = DATA_DIR / "sam31_edge_measurements.json"
+MASKS_GEOJSON_PATH = DATA_DIR / "sam31_mexico_beach_masks.geojson"
+
+TILE_PX = 504
+OVERLAP_PX = 32
+ROAD_BUFFER_M = 20.0
+CLASS_KEYS = ("road", "debris", "water")
+VECTOR_CLASS_LABEL = {"road": "road_surface", "debris": "debris", "water": "water"}
+MIN_POLYGON_AREA_M2 = {"road": 10.0, "debris": 2.0, "water": 4.0}
+
+
+def edge_lines_utm(G: Any) -> dict[tuple[Any, Any, int], LineString]:
+    """UTM centerline for every directed edge (straight node-to-node line when OSM has no geometry)."""
+    to_utm = Transformer.from_crs(WGS84_CRS, TARGET_METRIC_CRS, always_xy=True)
+    lines: dict[tuple[Any, Any, int], LineString] = {}
+    for u, v, k, data in G.edges(keys=True, data=True):
+        geom = data.get("geometry")
+        if not isinstance(geom, LineString) or geom.is_empty:
+            geom = LineString(
+                [(G.nodes[u]["x"], G.nodes[u]["y"]), (G.nodes[v]["x"], G.nodes[v]["y"])]
+            )
+        lines[(u, v, int(k))] = shapely_transform(to_utm.transform, geom)
+    return lines
+
+
+def tile_origins(size: int) -> list[int]:
+    stride = TILE_PX - OVERLAP_PX
+    origins = list(range(0, max(1, size - TILE_PX) + 1, stride))
+    if origins[-1] != size - TILE_PX:
+        origins.append(size - TILE_PX)
+    return origins
+
+
+def run_sam_mosaic(src: Any, near_roads: np.ndarray, limit_tiles: int | None, t_start: float) -> np.ndarray:
+    """Run SAM 3.1 over every road tile and mosaic uint8 probabilities (0-255) per class."""
+    height, width = src.height, src.width
+    windows = [
+        (r0, c0)
+        for r0 in tile_origins(height)
+        for c0 in tile_origins(width)
+        if near_roads[r0 : r0 + TILE_PX, c0 : c0 + TILE_PX].any()
+    ]
+    if limit_tiles:
+        windows = windows[:limit_tiles]
+    print(f"{len(windows)} road tiles of {TILE_PX}px", flush=True)
+
+    probs = np.zeros((len(CLASS_KEYS), height, width), dtype=np.uint8)
+    instrument = SAM31GeometricInstrument(checkpoint_dir=PROJECT_ROOT / "models" / "sam3.1")
+    half = OVERLAP_PX // 2
+    for i, (r0, c0) in enumerate(windows):
+        rgb = np.transpose(
+            src.read([1, 2, 3], window=Window(c0, r0, TILE_PX, TILE_PX)), (1, 2, 0)
+        ).astype(np.uint8)
+        maps = instrument.segment_tile_probabilities(Image.fromarray(rgb), SAM_PROMPTS)
+        # Write each tile's interior (half the overlap trimmed) so seams use the tile that
+        # saw more context; tiles on the raster border keep their outer edge.
+        top = 0 if r0 == 0 else half
+        left = 0 if c0 == 0 else half
+        bottom = TILE_PX if r0 + TILE_PX >= height else TILE_PX - half
+        right = TILE_PX if c0 + TILE_PX >= width else TILE_PX - half
+        for b, key in enumerate(CLASS_KEYS):
+            tile_u8 = np.clip(maps[key][top:bottom, left:right] * 255.0, 0, 255).astype(np.uint8)
+            region = probs[b, r0 + top : r0 + bottom, c0 + left : c0 + right]
+            np.maximum(region, tile_u8, out=region)
+        if (i + 1) % 10 == 0 or i + 1 == len(windows):
+            print(f"  SAM 3.1 tile {i + 1}/{len(windows)} ({time.perf_counter() - t_start:.0f}s)", flush=True)
+    instrument.unload_weights()
+    return probs
 
 
 def main() -> None:
-    raster_path = PROJECT_ROOT / "data" / "noaa_michael_mexico_beach.tif"
-    roads_path = PROJECT_ROOT / "data" / "osm_roads.geojson"
-    output_path = PROJECT_ROOT / "data" / "sam31_mexico_beach_masks.geojson"
+    parser = argparse.ArgumentParser(description="Bake SAM 3.1 road measurements")
+    parser.add_argument("--limit-tiles", type=int, default=None, help="process only N tiles (debug)")
+    parser.add_argument(
+        "--remeasure", action="store_true", help="reuse data/sam31_probabilities.tif instead of running SAM"
+    )
+    args = parser.parse_args()
 
-    t0 = time.perf_counter()
-    raster_meta = compute_raster_gsd_and_crs(raster_path, target_crs=TARGET_METRIC_CRS)
-    gsd_m_per_px = float(raster_meta["gsd_m_per_px"])
-    roads_utm = load_and_align_roads(roads_path, raster_path=raster_path, target_crs=TARGET_METRIC_CRS)
+    t_start = time.perf_counter()
+    gsd = float(compute_raster_gsd_and_crs(RASTER_PATH, target_crs=TARGET_METRIC_CRS)["gsd_m_per_px"])
+    G = ox.load_graphml(GRAPHML_PATH)
+    lines = edge_lines_utm(G)
 
-    instrument = SAM31GeometricInstrument(checkpoint_dir=PROJECT_ROOT / "models" / "sam3.1")
-    to_wgs84 = Transformer.from_crs(TARGET_METRIC_CRS, WGS84_CRS, always_xy=True)
-
-    # 1. Sample 8 representative aerial tiles across the Mexico Beach road network and run real Sam3Model
-    tile_size = 512
-    step = max(1, len(roads_utm) // 8)
-    sampled_rows = [roads_utm.iloc[i] for i in range(0, min(len(roads_utm), step * 8), step)]
-
-    tile_sam_telemetry: list[dict[str, Any]] = []
-    vectorized_tile_features: list[dict[str, Any]] = []
-
-    with rasterio.open(raster_path) as src:
-        raster_crs = src.crs.to_string() if src.crs else WGS84_CRS
+    with rasterio.open(RASTER_PATH) as src:
+        height, width = src.height, src.width
+        raster_crs = src.crs.to_string()
+        transform = src.transform
+        profile = src.profile
         utm_to_raster = Transformer.from_crs(TARGET_METRIC_CRS, raster_crs, always_xy=True)
+        road_buffer_raster = shapely_transform(
+            utm_to_raster.transform, unary_union([ln.buffer(ROAD_BUFFER_M) for ln in lines.values()])
+        )
+        near_roads = rasterize(
+            [(road_buffer_raster, 1)], out_shape=(height, width), transform=transform, dtype="uint8"
+        ).astype(bool)
 
-        for tile_idx, row in enumerate(sampled_rows):
-            geom = row.geometry
-            mid_utm = geom.interpolate(0.5, normalized=True)
-            rx, ry = utm_to_raster.transform(mid_utm.x, mid_utm.y)
-            r_row, r_col = src.index(rx, ry)
-
-            half = tile_size // 2
-            col_off = max(0, min(int(r_col - half), max(0, src.width - tile_size)))
-            row_off = max(0, min(int(r_row - half), max(0, src.height - tile_size)))
-            win_w = min(tile_size, src.width - col_off)
-            win_h = min(tile_size, src.height - row_off)
-
-            window = Window(col_off=col_off, row_off=row_off, width=win_w, height=win_h)
-            win_transform = src.window_transform(window)
-            bands = [1, 2, 3] if src.count >= 3 else [1] * 3
-            arr = src.read(bands, window=window)
-            rgb = np.transpose(arr, (1, 2, 0)).astype(np.uint8)
-            pil_tile = Image.fromarray(rgb, mode="RGB")
-
-            seg_out = instrument.segment_tile(
-                pil_tile,
-                prompts=("road", "debris", "standing water"),
-                mask_threshold=0.5,
-            )
-            tile_sam_telemetry.append(
-                {
-                    "tile_index": tile_idx,
-                    "road": seg_out["road"],
-                    "debris": seg_out["debris"],
-                    "standing water": seg_out["standing water"],
-                }
-            )
-            print(
-                f"[SAM 3.1 Tile {tile_idx + 1}/{len(sampled_rows)}] "
-                f"road_conf={seg_out['road']['confidence_score']:.4f} "
-                f"debris_conf={seg_out['debris']['confidence_score']:.4f} "
-                f"water_conf={seg_out['standing water']['confidence_score']:.4f}"
-            )
-
-            # Vectorize road surface mask from this tile clipped to the local corridor buffer
-            corridor_clip_utm = geom.buffer(12.0)
-            for prompt_key, class_label in (
-                ("road", "road_surface"),
-                ("debris", "debris"),
-                ("standing water", "water"),
-            ):
-                p_info = seg_out[prompt_key]
-                mp_utm = mask_array_to_utm_polygons(
-                    p_info["mask"],
-                    win_transform,
-                    src_crs=raster_crs,
-                    target_crs=TARGET_METRIC_CRS,
-                )
-                if not mp_utm.is_empty:
-                    clipped = mp_utm.intersection(corridor_clip_utm)
-                    if not clipped.is_empty and clipped.area >= 1.5 and class_label == "road_surface":
-                        poly_wgs84 = shapely_transform(to_wgs84.transform, clipped)
-                        vectorized_tile_features.append(
-                            {
-                                "type": "Feature",
-                                "geometry": mapping(poly_wgs84),
-                                "properties": {
-                                    "feature_id": f"sam31-tile{tile_idx}-{class_label}",
-                                    "class_label": class_label,
-                                    "prompt": prompt_key,
-                                    "confidence_score": float(p_info["confidence_score"]),
-                                    "top_query_confidence": float(p_info["top_query_confidence"]),
-                                    "area_m2": round(float(clipped.area), 3),
-                                    "gsd_m_per_px": round(gsd_m_per_px, 4),
-                                    "mask_source": "sam-3.1",
-                                },
-                            }
-                        )
-
-    # 2. Generate corridor-aligned SAM 3.1 obstacle & road surface polygons across the network
-    #    annotated with the real Sam3Model confidence scores measured on the Mexico Beach tiles.
-    features: list[dict[str, Any]] = list(vectorized_tile_features)
-    half_w = DEFAULT_NOMINAL_ROAD_HALF_WIDTH_M
-
-    for idx, (_, row) in enumerate(roads_utm.iterrows()):
-        geom = row.geometry
-        if geom is None or geom.is_empty:
-            continue
-        if isinstance(geom, MultiLineString):
-            line = max(geom.geoms, key=lambda g: g.length)
-        elif isinstance(geom, LineString):
-            line = geom
+        if args.remeasure:
+            with rasterio.open(PROB_TIF_PATH) as prob_src:
+                probs = prob_src.read()
+            print(f"Reusing SAM 3.1 probabilities from {PROB_TIF_PATH}", flush=True)
         else:
+            probs = run_sam_mosaic(src, near_roads, args.limit_tiles, t_start)
+
+    if not args.remeasure:
+        profile.update(
+            count=len(CLASS_KEYS), dtype="uint8", compress="deflate", nodata=None, photometric="minisblack"
+        )
+        profile.pop("alpha", None)
+        with rasterio.open(PROB_TIF_PATH, "w", **profile) as dst:
+            dst.write(probs)
+            dst.descriptions = tuple(f"sam-3.1:{SAM_PROMPTS[k]}" for k in CLASS_KEYS)
+        print(f"Saved probability mosaic -> {PROB_TIF_PATH}", flush=True)
+
+    # Measure every edge; reverse directions share one measurement of the same pavement.
+    inv = ~transform
+
+    def sampler(pts_utm: np.ndarray) -> dict[str, np.ndarray]:
+        xs, ys = utm_to_raster.transform(pts_utm[:, 0], pts_utm[:, 1])
+        cols, rows = inv * (np.asarray(xs), np.asarray(ys))
+        coords = np.vstack([np.asarray(rows) - 0.5, np.asarray(cols) - 0.5])
+        return {
+            key: ndimage.map_coordinates(probs[b], coords, order=1, mode="constant", cval=0.0) / 255.0
+            for b, key in enumerate(CLASS_KEYS)
+        }
+
+    to_wgs84 = Transformer.from_crs(TARGET_METRIC_CRS, WGS84_CRS, always_xy=True)
+    measured: dict[frozenset, dict[str, Any]] = {}
+    edges_out: dict[str, Any] = {}
+    for (u, v, k), line in lines.items():
+        canon = frozenset({(u, v, k), (v, u, k)})
+        if canon not in measured:
+            m = measure_edge(line, sampler)
+            record = m.to_dict()
+            record["reason"] = describe_edge_measurement(m, gsd)
+            pinch = next((st for st in m.stations if abs(st.station_m - m.pinch_station_m) < 1e-6), None)
+            record["bottleneck_lonlat"] = list(to_wgs84.transform(*pinch.center_utm)) if pinch else None
+            measured[canon] = record
+        edges_out[f"{u}-{v}-{k}"] = measured[canon]
+
+    widths = [r["min_clear_width_m"] for r in measured.values()]
+    summary = {
+        "roads_measured": len(measured),
+        "water_roads": sum(r["has_water_obstruction"] for r in measured.values()),
+        "drone_recon_roads": sum(r["needs_drone_recon"] for r in measured.values()),
+        "median_min_clear_width_m": round(float(np.median(widths)), 2),
+        "fire_engine_passable": sum(w > 3.5 for w in widths),
+        "ambulance_passable": sum(w > 2.2 for w in widths),
+        "atv_passable": sum(w > 1.2 for w in widths),
+    }
+    MEASUREMENTS_PATH.write_text(
+        json.dumps(
+            {
+                "model_id": "sam-3.1",
+                "mask_source": "sam-3.1",
+                "prompts": SAM_PROMPTS,
+                "metric_crs": TARGET_METRIC_CRS,
+                "gsd_m_per_px": round(gsd, 4),
+                "tile_px": TILE_PX,
+                "summary": summary,
+                "edges": edges_out,
+            }
+        ),
+        encoding="utf-8",
+    )
+    print(f"Saved measurements -> {MEASUREMENTS_PATH}\n{summary}", flush=True)
+
+    # Vectorise masks near roads for display. Polygons come from connected components so
+    # each one carries its own mean SAM probability.
+    raster_to_utm = Transformer.from_crs(raster_crs, TARGET_METRIC_CRS, always_xy=True)
+    features: list[dict[str, Any]] = []
+    for b, key in enumerate(CLASS_KEYS):
+        mask = (probs[b] >= 128) & near_roads
+        if not mask.any():
             continue
-
-        if line.length < 10.0:
-            continue
-
-        tile_ref = tile_sam_telemetry[idx % len(tile_sam_telemetry)]
-        num_stations = int(math.floor(line.length / DEFAULT_SAMPLING_INTERVAL_M))
-        mid_station_idx = max(1, num_stations // 2)
-        target_s = min(line.length * 0.5, mid_station_idx * DEFAULT_SAMPLING_INTERVAL_M)
-        if num_stations >= 2:
-            target_s = mid_station_idx * DEFAULT_SAMPLING_INTERVAL_M
-
-        pt = line.interpolate(target_s)
-        p0 = line.interpolate(max(0.0, target_s - 0.5))
-        p1 = line.interpolate(min(line.length, target_s + 0.5))
-        dx, dy = p1.x - p0.x, p1.y - p0.y
-        norm = math.hypot(dx, dy) or 1.0
-        tx, ty = dx / norm, dy / norm
-        nx_val, ny_val = -ty, tx
-
-        bucket = idx % 8
-        patch_utm: Polygon | None = None
-        class_label = "debris"
-        prompt_name = "debris"
-        conf_score = float(tile_ref["debris"]["confidence_score"])
-
-        if bucket == 1:
-            patch_utm = _make_oriented_road_patch(
-                pt, tx, ty, nx_val, ny_val, -3.0, 3.0, -1.2, half_w + 1.0
-            )
-        elif bucket == 3:
-            patch_utm = _make_oriented_road_patch(
-                pt, tx, ty, nx_val, ny_val, -3.0, 3.0, -2.3, half_w + 1.0
-            )
-        elif bucket == 5:
-            patch_utm = _make_oriented_road_patch(
-                pt, tx, ty, nx_val, ny_val, -3.0, 3.0, -3.4, half_w + 1.0
-            )
-        elif bucket == 7:
-            patch_utm = _make_oriented_road_patch(
-                pt, tx, ty, nx_val, ny_val, -3.5, 3.5, -half_w - 1.0, half_w + 1.0
-            )
-            class_label = "water"
-            prompt_name = "standing water"
-            conf_score = float(tile_ref["standing water"]["confidence_score"])
-
-        if patch_utm is not None and not patch_utm.is_empty:
-            poly_wgs84 = shapely_transform(to_wgs84.transform, patch_utm)
+        labels, n_labels = ndimage.label(mask)
+        mean_by_label = ndimage.mean(probs[b], labels=labels, index=np.arange(1, n_labels + 1)) / 255.0
+        for geom_dict, label_val in raster_shapes(
+            labels.astype(np.int32), mask=mask, transform=transform, connectivity=4
+        ):
+            poly_utm = shapely_transform(raster_to_utm.transform, shape(geom_dict)).simplify(0.4)
+            if poly_utm.is_empty or poly_utm.area < MIN_POLYGON_AREA_M2[key]:
+                continue
             features.append(
                 {
                     "type": "Feature",
-                    "geometry": mapping(poly_wgs84),
+                    "geometry": mapping(shapely_transform(to_wgs84.transform, poly_utm)),
                     "properties": {
-                        "feature_id": f"sam31-corridor-{idx}-{class_label}",
-                        "edge_index": int(idx),
-                        "class_label": class_label,
-                        "prompt": prompt_name,
-                        "confidence_score": round(conf_score, 4),
-                        "needs_drone_recon": bool(conf_score < 0.70),
-                        "area_m2": round(float(patch_utm.area), 3),
-                        "gsd_m_per_px": round(gsd_m_per_px, 4),
+                        "class_label": VECTOR_CLASS_LABEL[key],
+                        "prompt": SAM_PROMPTS[key],
+                        "confidence_score": round(float(mean_by_label[int(label_val) - 1]), 4),
+                        "area_m2": round(float(poly_utm.area), 2),
+                        "gsd_m_per_px": round(gsd, 4),
                         "mask_source": "sam-3.1",
                     },
                 }
             )
-
-    instrument.unload_weights()
-
-    geojson_payload = {
-        "type": "FeatureCollection",
-        "properties": {
-            "model_id": "sam-3.1",
-            "mask_source": "sam-3.1",
-            "prompts": ["road", "debris", "standing water"],
-            "crs": WGS84_CRS,
-            "metric_crs": TARGET_METRIC_CRS,
-            "gsd_m_per_px": round(gsd_m_per_px, 4),
-            "feature_count": len(features),
-        },
-        "features": features,
-    }
-    output_path.write_text(json.dumps(geojson_payload, indent=2), encoding="utf-8")
+    MASKS_GEOJSON_PATH.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "properties": {
+                    "model_id": "sam-3.1",
+                    "mask_source": "sam-3.1",
+                    "prompts": SAM_PROMPTS,
+                    "crs": WGS84_CRS,
+                    "gsd_m_per_px": round(gsd, 4),
+                    "feature_count": len(features),
+                },
+                "features": features,
+            }
+        ),
+        encoding="utf-8",
+    )
     print(
-        f"Saved {len(features)} SAM 3.1 mask features to {output_path} in {time.perf_counter() - t0:.2f}s"
+        f"Saved {len(features)} SAM 3.1 mask polygons -> {MASKS_GEOJSON_PATH} "
+        f"(total {time.perf_counter() - t_start:.0f}s)",
+        flush=True,
     )
 
 
