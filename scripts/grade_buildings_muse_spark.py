@@ -59,15 +59,23 @@ MODEL = "muse-spark-1.3"
 MIN_HALF_EXTENT_M = 25.0
 CONTEXT_M = 8.0
 MAX_PANEL_PX = 320
-GRADING_METHOD = "muse-spark-1.3 per-building pre/post (NAIP 2017 vs NOAA 2018)"
+GRADING_METHOD = "muse-spark-1.3 per-building pre/post (NAIP 2017 vs NOAA 2018), prompt xbd-v2"
+# v2 uses the xBD definitions verbatim-in-spirit and reserves "destroyed" for buildings with no
+# standing structure (v1 over-graded major damage as destroyed on the dev labels).
+PROMPT_VERSION = "xbd-v2"
 PROMPT = (
     "You are grading hurricane damage to ONE building for emergency responders. The image has two "
-    "panels of the same area: LEFT = BEFORE (Oct/Nov 2017, 1 m aerial), RIGHT = AFTER "
+    "panels of the same area: LEFT = BEFORE (Oct/Nov 2017, 1 m aerial, blurrier), RIGHT = AFTER "
     "Hurricane Michael (Oct 11, 2018, 0.28 m aerial). The building is inside the yellow dashed outline "
-    "(the outline comes from OpenStreetMap and may be offset by a few metres). Grade only that building "
-    "on the xBD scale: no_damage = roof intact; minor_damage = some roof cover missing, tarps, small "
-    "debris; major_damage = part of the roof or walls collapsed; destroyed = collapsed, shifted off its "
-    "slab, or gone. Reply with ONLY a JSON object: {\"damage_severity\": one of no_damage, "
+    "(from OpenStreetMap; it may be offset by a few metres). Grade only that building on the xBD scale:\n"
+    "- no_damage: undisturbed; no visible roof or structural damage.\n"
+    "- minor_damage: roof elements or cover missing, tarps, visible cracks, debris on or around it, "
+    "but the roof outline is intact.\n"
+    "- major_damage: partial wall or roof collapse; a large part of the roof is gone but walls stand.\n"
+    "- destroyed: completely collapsed, pancaked, swept off its foundation, or no longer present "
+    "(bare slab or rubble only).\n"
+    "Choose destroyed ONLY when no standing structure remains. Debris around a building is not damage "
+    "to that building. Reply with ONLY a JSON object: {\"damage_severity\": one of no_damage, "
     "minor_damage, major_damage, destroyed, \"confidence\": number 0-1, \"visual_evidence\": one short "
     "sentence describing what changed between BEFORE and AFTER}."
 )
@@ -126,7 +134,7 @@ def load_done() -> dict[str, dict[str, Any]]:
     if GRADES_JSONL.exists():
         for line in GRADES_JSONL.read_text(encoding="utf-8").splitlines():
             rec = json.loads(line)
-            if rec.get("damage_severity"):
+            if rec.get("damage_severity") and rec.get("prompt_version") == PROMPT_VERSION:
                 done[rec["building_id"]] = rec
     return done
 
@@ -188,6 +196,7 @@ async def grade_one(client: httpx.AsyncClient, api_key: str, bldg: dict[str, Any
                     "building_id": bldg["building_id"],
                     **answer,
                     "model": MODEL,
+                    "prompt_version": PROMPT_VERSION,
                     "reasoning_effort": effort,
                     "usage": data.get("usage", {}),
                     "latency_s": round(time.perf_counter() - t0, 2),
