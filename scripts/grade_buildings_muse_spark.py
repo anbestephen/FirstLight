@@ -1,12 +1,26 @@
 """
-Crop aerial patches from `data/noaa_michael_mexico_beach.tif` across the Mexico Beach
-building sectors and grade structural damage using real `muse-spark-1.3` vision calls
-(`https://api.meta.ai/v1/chat/completions`, `max_tokens=2048`, `timeout=20.0`), saving
-the verified output to `data/osm_buildings_graded.geojson`.
+Grade every Mexico Beach building with Muse Spark from pre/post imagery
+(`scripts/grade_buildings_muse_spark.py`).
+
+For each OSM building footprint, one composite image is sent to `muse-spark-1.3`:
+BEFORE = USDA NAIP 2017 (1 m) and AFTER = NOAA Oct 11, 2018 (0.28 m), both resampled to the
+same 0.25 m/px metric crop with the footprint outlined. The model returns an xBD damage grade
+with its own confidence and one sentence of visual evidence. Every answer is stored per
+building - nothing is assigned by rule or quota.
+
+Answers are appended to `data/muse_spark_building_grades.jsonl` as they arrive, so a run can
+be interrupted and resumed without paying for a building twice. `--write-geojson` builds
+`data/osm_buildings_graded.geojson` once every building has a grade.
+
+Usage:
+  .venv/bin/python scripts/grade_buildings_muse_spark.py --limit 20   # trial (reports tokens)
+  .venv/bin/python scripts/grade_buildings_muse_spark.py              # grade the rest
+  .venv/bin/python scripts/grade_buildings_muse_spark.py --write-geojson
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import base64
 import io
@@ -20,302 +34,287 @@ from typing import Any
 from dotenv import load_dotenv
 import geopandas as gpd
 import httpx
-import numpy as np
-from PIL import Image
-from pyproj import Transformer
-import rasterio
-from rasterio.windows import Window
+from PIL import Image, ImageDraw
 from shapely.geometry import mapping
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.failover import META_MODEL_API_BASE_URL, normalize_damage_severity
-from src.geometry import WGS84_CRS, extract_corridor_aerial_crop_png
+from src.failover import META_MODEL_API_BASE_URL, normalize_damage_severity  # noqa: E402
+from src.labeling import (  # noqa: E402
+    CROP_RES_M,
+    POST_EVENT_PATH,
+    PRE_EVENT_PATH,
+    render_metric_crop,
+    utm_to_pixel,
+)
+
+DATA_DIR = PROJECT_ROOT / "data"
+BUILDINGS_PATH = DATA_DIR / "osm_buildings.geojson"
+GRADES_JSONL = DATA_DIR / "muse_spark_building_grades.jsonl"
+GRADED_GEOJSON = DATA_DIR / "osm_buildings_graded.geojson"
+
+MODEL = "muse-spark-1.3"
+MIN_HALF_EXTENT_M = 25.0
+CONTEXT_M = 8.0
+MAX_PANEL_PX = 320
+GRADING_METHOD = "muse-spark-1.3 per-building pre/post (NAIP 2017 vs NOAA 2018)"
+PROMPT = (
+    "You are grading hurricane damage to ONE building for emergency responders. The image has two "
+    "panels of the same area: LEFT = BEFORE (Oct/Nov 2017, 1 m aerial), RIGHT = AFTER "
+    "Hurricane Michael (Oct 11, 2018, 0.28 m aerial). The building is inside the yellow dashed outline "
+    "(the outline comes from OpenStreetMap and may be offset by a few metres). Grade only that building "
+    "on the xBD scale: no_damage = roof intact; minor_damage = some roof cover missing, tarps, small "
+    "debris; major_damage = part of the roof or walls collapsed; destroyed = collapsed, shifted off its "
+    "slab, or gone. Reply with ONLY a JSON object: {\"damage_severity\": one of no_damage, "
+    "minor_damage, major_damage, destroyed, \"confidence\": number 0-1, \"visual_evidence\": one short "
+    "sentence describing what changed between BEFORE and AFTER}."
+)
 
 
-def _compute_roof_anomaly_score(
-    src: rasterio.DatasetReader,
-    lon: float,
-    lat: float,
-    raster_crs: str,
-) -> dict[str, float]:
-    """Measure local RGB roof rubble/void texture from the NOAA GeoTIFF around (lon, lat)."""
-    if raster_crs != WGS84_CRS:
-        tr = Transformer.from_crs(WGS84_CRS, raster_crs, always_xy=True)
-        rx, ry = tr.transform(lon, lat)
-    else:
-        rx, ry = lon, lat
-    r_row, r_col = src.index(rx, ry)
-    win = Window(
-        col_off=max(0, min(int(r_col - 24), src.width - 48)),
-        row_off=max(0, min(int(r_row - 24), src.height - 48)),
-        width=min(48, src.width),
-        height=min(48, src.height),
-    )
-    bands = [1, 2, 3] if src.count >= 3 else [1] * 3
-    patch = src.read(bands, window=win).astype(np.float32)
-    luma_std = float(np.std(patch))
-    bright_ratio = float(np.mean(patch > 195.0))
-    dark_ratio = float(np.mean(patch < 55.0))
-    return {
-        "luma_std": round(luma_std, 2),
-        "bright_rubble_ratio": round(bright_ratio, 3),
-        "dark_void_ratio": round(dark_ratio, 3),
-    }
+def half_extent_m(centroid_utm: list[float], footprint_utm: list[list[float]]) -> float:
+    """Crop half-size that fits the whole footprint plus some context (at least 50 m across)."""
+    reach = max(max(abs(x - centroid_utm[0]), abs(y - centroid_utm[1])) for x, y in footprint_utm)
+    return max(MIN_HALF_EXTENT_M, reach + CONTEXT_M)
 
 
-async def _grade_sector_with_muse_spark(
-    client: httpx.AsyncClient,
-    api_key: str,
-    sector_idx: int,
-    sector_buildings: list[dict[str, Any]],
-    crop_png_bytes: bytes,
-) -> dict[str, Any]:
-    """Call `muse-spark-1.3` (`max_tokens=2048`, `timeout=20.0`) on a 256x256 sector aerial crop."""
-    b64_img = base64.b64encode(crop_png_bytes).decode("ascii")
-    compact_bldg_list = [
-        {
-            "id": b["building_id"],
-            "luma_std": b["roof_stats"]["luma_std"],
-            "rubble_ratio": b["roof_stats"]["bright_rubble_ratio"],
-        }
-        for b in sector_buildings[:8]
-    ]
-    prompt = (
-        f"Assess Hurricane Michael building damage in Mexico Beach Sector #{sector_idx + 1}. "
-        f"Roof rubble stats: {json.dumps(compact_bldg_list[:4])}. "
-        "Keep reasoning very brief (<200 tokens) and output ONLY a JSON object with keys: "
-        "'primary_damage_severity' ('no_damage', 'minor_damage', 'major_damage', or 'destroyed'), "
-        "'secondary_damage_severity' ('no_damage', 'minor_damage', 'major_damage', or 'destroyed'), "
-        "and 'visual_cue_summary' (1 short sentence on roof/debris damage in the image)."
-    )
-    payload = {
-        "model": "muse-spark-1.3",
+def composite_png(centroid_utm: list[float], footprint_utm: list[list[float]]) -> bytes:
+    """BEFORE | AFTER side by side (same metric grid) with the footprint outlined in both."""
+    half = half_extent_m(centroid_utm, footprint_utm)
+    panels = []
+    outline = [utm_to_pixel(x, y, centroid_utm, half) for x, y in footprint_utm]
+    for path, label in ((PRE_EVENT_PATH, "BEFORE 2017"), (POST_EVENT_PATH, "AFTER 2018")):
+        img = Image.fromarray(render_metric_crop(path, centroid_utm, half))
+        draw = ImageDraw.Draw(img)
+        draw.line(outline + [outline[0]], fill=(250, 204, 21), width=2)
+        if img.size[0] > MAX_PANEL_PX:
+            img = img.resize((MAX_PANEL_PX, MAX_PANEL_PX), Image.LANCZOS)
+            draw = ImageDraw.Draw(img)
+        draw.rectangle([0, 0, 92, 16], fill=(0, 0, 0))
+        draw.text((4, 3), label, fill=(255, 255, 255))
+        panels.append(img)
+    size = panels[0].size[0]
+    sheet = Image.new("RGB", (size * 2 + 6, size), (255, 255, 255))
+    sheet.paste(panels[0], (0, 0))
+    sheet.paste(panels[1], (size + 6, 0))
+    buf = io.BytesIO()
+    sheet.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def load_buildings() -> list[dict[str, Any]]:
+    gdf = gpd.read_file(BUILDINGS_PATH)
+    utm = gdf.to_crs("EPSG:32616")
+    out = []
+    for idx in range(len(gdf)):
+        geom = utm.geometry.iloc[idx]
+        out.append(
+            {
+                "building_id": f"bldg-{idx}",
+                "building_type": str(gdf.iloc[idx].get("building") or "yes"),
+                "geometry_wgs84": gdf.geometry.iloc[idx],
+                "centroid_utm": [geom.centroid.x, geom.centroid.y],
+                "footprint_utm": [list(c) for c in geom.exterior.coords],
+            }
+        )
+    return out
+
+
+def load_done() -> dict[str, dict[str, Any]]:
+    done: dict[str, dict[str, Any]] = {}
+    if GRADES_JSONL.exists():
+        for line in GRADES_JSONL.read_text(encoding="utf-8").splitlines():
+            rec = json.loads(line)
+            if rec.get("damage_severity"):
+                done[rec["building_id"]] = rec
+    return done
+
+
+def parse_answer(content: str) -> dict[str, Any] | None:
+    start, end = content.find("{"), content.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        data = json.loads(content[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    raw = str(data.get("damage_severity", "")).strip().lower()
+    if raw not in ("no_damage", "minor_damage", "major_damage", "destroyed"):
+        raw = normalize_damage_severity(raw, default="")  # type: ignore[arg-type]
+        if not raw:
+            return None
+    try:
+        conf = float(data.get("confidence"))
+    except (TypeError, ValueError):
+        conf = None
+    return {"damage_severity": raw, "model_confidence": conf, "visual_evidence": str(data.get("visual_evidence", ""))[:300]}
+
+
+async def grade_one(client: httpx.AsyncClient, api_key: str, bldg: dict[str, Any], effort: str | None) -> dict[str, Any]:
+    image_b64 = base64.b64encode(
+        await asyncio.to_thread(composite_png, bldg["centroid_utm"], bldg["footprint_utm"])
+    ).decode("ascii")
+    payload: dict[str, Any] = {
+        "model": MODEL,
         "messages": [
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{b64_img}"},
-                    },
+                    {"type": "text", "text": PROMPT},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
                 ],
             }
         ],
         "temperature": 0.0,
         "max_tokens": 2048,
     }
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    raw_content = ""
-    reasoning_tokens = 0
-    for attempt in range(2):
-        resp = await client.post(
-            f"{META_MODEL_API_BASE_URL}/chat/completions",
-            json=payload,
-            headers=headers,
-            timeout=httpx.Timeout(20.0),
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        raw_content = data["choices"][0]["message"].get("content") or ""
-        usage = data.get("usage", {})
-        reasoning_tokens = (
-            usage.get("completion_tokens_details", {}).get("reasoning_tokens", 0)
-            if isinstance(usage, dict)
-            else 0
-        )
-        if str(raw_content).strip():
-            break
-
-    cleaned = str(raw_content).strip()
-    s_idx = cleaned.find("{")
-    e_idx = cleaned.rfind("}")
-    parsed: dict[str, Any] = {}
-    if s_idx != -1 and e_idx != -1 and e_idx > s_idx:
+    if effort:
+        payload["reasoning_effort"] = effort
+    t0 = time.perf_counter()
+    for attempt in range(3):
         try:
-            parsed = json.loads(cleaned[s_idx : e_idx + 1])
-        except json.JSONDecodeError:
-            parsed = {}
-
-    p_sev = normalize_damage_severity(
-        parsed.get("primary_damage_severity") or parsed.get("building_damage_severity") or cleaned,
-        default="major_damage",
-    )
-    s_sev = normalize_damage_severity(
-        parsed.get("secondary_damage_severity") or parsed.get("road_damage_severity"),
-        default="minor_damage",
-    )
-    first_line = cleaned.splitlines()[0][:200] if cleaned else ""
-    cue_raw = str(
-        parsed.get("visual_cue_summary")
-        or first_line
-        or f"Sector {sector_idx + 1} post-Michael roof & structural debris grading."
-    ).strip()
-    if not cue_raw.startswith("[MUSE-SPARK-1.3 CLOUD VLM]"):
-        cue_raw = f"[MUSE-SPARK-1.3 CLOUD VLM] {cue_raw}"
-
-    print(
-        f"[Sector {sector_idx + 1:02d}] muse-spark-1.3 -> primary={p_sev}, secondary={s_sev}, "
-        f"reasoning_tokens={reasoning_tokens}, cue='{cue_raw[:85]}...'"
-    )
-    return {
-        "sector_index": sector_idx,
-        "primary_severity": p_sev,
-        "secondary_severity": s_sev,
-        "visual_cue_summary": cue_raw,
-        "reasoning_tokens": reasoning_tokens,
-    }
+            resp = await client.post(
+                f"{META_MODEL_API_BASE_URL}/chat/completions",
+                json=payload,
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=60.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            answer = parse_answer(data["choices"][0]["message"].get("content") or "")
+            if answer:
+                return {
+                    "building_id": bldg["building_id"],
+                    **answer,
+                    "model": MODEL,
+                    "reasoning_effort": effort,
+                    "usage": data.get("usage", {}),
+                    "latency_s": round(time.perf_counter() - t0, 2),
+                }
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            if attempt == 2:
+                return {"building_id": bldg["building_id"], "error": f"{type(exc).__name__}: {exc}"[:200]}
+        await asyncio.sleep(1.5 * (attempt + 1))
+    return {"building_id": bldg["building_id"], "error": "unparseable answer"}
 
 
-async def run_grading() -> None:
+async def run_grading(limit: int | None, concurrency: int, effort: str | None) -> None:
     load_dotenv(PROJECT_ROOT / ".env")
     api_key = os.environ.get("MODEL_API_KEY", "").strip()
     if not api_key:
-        raise RuntimeError("MODEL_API_KEY is required in .env to run grade_buildings_muse_spark.py")
+        raise SystemExit("MODEL_API_KEY is required in .env")
+    if not PRE_EVENT_PATH.exists():
+        raise SystemExit("Pre-event imagery missing: run scripts/fetch_pre_event_naip.py first")
 
-    buildings_path = PROJECT_ROOT / "data" / "osm_buildings.geojson"
-    raster_path = PROJECT_ROOT / "data" / "noaa_michael_mexico_beach.tif"
-    output_path = PROJECT_ROOT / "data" / "osm_buildings_graded.geojson"
+    buildings = load_buildings()
+    done = load_done()
+    todo = [b for b in buildings if b["building_id"] not in done][: limit or None]
+    print(f"{len(done)} already graded, grading {len(todo)} now with {MODEL} (effort={effort})", flush=True)
 
-    t0 = time.perf_counter()
-    gdf = gpd.read_file(buildings_path)
-    if gdf.crs is None:
-        gdf = gdf.set_crs(WGS84_CRS)
-    else:
-        gdf = gdf.to_crs(WGS84_CRS)
+    sem = asyncio.Semaphore(concurrency)
+    totals = {"ok": 0, "err": 0, "prompt": 0, "completion": 0, "reasoning": 0}
+    async with httpx.AsyncClient() as client:
 
-    records: list[dict[str, Any]] = []
-    with rasterio.open(raster_path) as src:
-        raster_crs = src.crs.to_string() if src.crs else WGS84_CRS
-        for idx, row in gdf.iterrows():
-            geom = row.geometry
-            if geom is None or geom.is_empty:
-                continue
-            c = geom.centroid
-            lon, lat = float(c.x), float(c.y)
-            roof_stats = _compute_roof_anomaly_score(src, lon, lat, raster_crs)
-            records.append(
-                {
-                    "idx": int(idx),
-                    "building_id": f"bldg-{idx}",
-                    "building_type": str(row.get("building") or "yes"),
-                    "lon": lon,
-                    "lat": lat,
-                    "geometry": geom,
-                    "roof_stats": roof_stats,
-                }
+        async def worker(b: dict[str, Any]) -> None:
+            async with sem:
+                rec = await grade_one(client, api_key, b, effort)
+            with GRADES_JSONL.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec) + "\n")
+            if "error" in rec:
+                totals["err"] += 1
+                print(f"  {b['building_id']}: ERROR {rec['error']}", flush=True)
+                return
+            totals["ok"] += 1
+            usage = rec.get("usage") or {}
+            totals["prompt"] += int(usage.get("prompt_tokens", 0))
+            totals["completion"] += int(usage.get("completion_tokens", 0))
+            totals["reasoning"] += int((usage.get("completion_tokens_details") or {}).get("reasoning_tokens", 0))
+            print(
+                f"  {b['building_id']}: {rec['damage_severity']:<12} conf={rec['model_confidence']} "
+                f"{rec['latency_s']}s  {rec['visual_evidence'][:70]}",
+                flush=True,
             )
 
-    # Sort spatially by longitude so each sector is a contiguous Mexico Beach neighborhood block
-    records_sorted = sorted(records, key=lambda r: (r["lon"], r["lat"]))
-    num_sectors = 10
-    chunk_size = max(1, (len(records_sorted) + num_sectors - 1) // num_sectors)
-    sectors: list[list[dict[str, Any]]] = [
-        records_sorted[i : i + chunk_size]
-        for i in range(0, len(records_sorted), chunk_size)
-    ]
+        await asyncio.gather(*(worker(b) for b in todo))
 
-    sector_crops: list[bytes] = []
-    for sec in sectors:
-        mid_b = sec[len(sec) // 2]
-        crop_bytes = extract_corridor_aerial_crop_png(
-            raster_path, mid_b["lon"], mid_b["lat"], size_px=256
-        )
-        sector_crops.append(crop_bytes)
-
-    sem = asyncio.Semaphore(5)
-
-    async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
-        async def _worker(s_idx: int) -> dict[str, Any]:
-            async with sem:
-                return await _grade_sector_with_muse_spark(
-                    client, api_key, s_idx, sectors[s_idx], sector_crops[s_idx]
-                )
-
-        sector_results = await asyncio.gather(*[_worker(i) for i in range(len(sectors))])
-
-    sector_map = {res["sector_index"]: res for res in sector_results}
-
-    # Assign each building's severity from its sector's muse-spark-1.3 VLM assessment + local roof rubble telemetry
-    features_by_idx: dict[int, dict[str, Any]] = {}
-    severity_counts = {
-        "destroyed": 0,
-        "major_damage": 0,
-        "minor_damage": 0,
-        "no_damage": 0,
-    }
-
-    for s_idx, sec in enumerate(sectors):
-        s_res = sector_map[s_idx]
-        p_sev = s_res["primary_severity"]
-        s_sev = s_res["secondary_severity"]
-        cue = s_res["visual_cue_summary"]
-
-        # Rank buildings within the sector by measured roof rubble + texture variance
-        sec_ranked = sorted(
-            sec,
-            key=lambda b: (
-                b["roof_stats"]["luma_std"] + 120.0 * b["roof_stats"]["bright_rubble_ratio"]
-            ),
-            reverse=True,
-        )
-        n_sec = len(sec_ranked)
-        for rank_i, b in enumerate(sec_ranked):
-            pct = rank_i / max(1, n_sec)
-            if pct < 0.25:
-                b_sev = "destroyed" if p_sev in ("destroyed", "major_damage") else p_sev
-            elif pct < 0.50:
-                b_sev = "major_damage" if p_sev != "no_damage" else s_sev
-            elif pct < 0.80:
-                b_sev = s_sev if s_sev in ("minor_damage", "no_damage") else "minor_damage"
-            else:
-                b_sev = "no_damage"
-
-            b_sev = normalize_damage_severity(b_sev)
-            severity_counts[b_sev] += 1
-            is_high = b_sev in ("major_damage", "destroyed")
-
-            features_by_idx[b["idx"]] = {
-                "type": "Feature",
-                "geometry": mapping(b["geometry"]),
-                "properties": {
-                    "building_id": b["building_id"],
-                    "building_type": b["building_type"],
-                    "sector_id": f"sector-{s_idx + 1:02d}",
-                    "damage_severity": b_sev,
-                    "building_damage_severity": b_sev,
-                    "is_high_severity": is_high,
-                    "grading_source": "muse-spark-1.3",
-                    "visual_cue_summary": cue,
-                    "roof_luma_std": b["roof_stats"]["luma_std"],
-                    "roof_rubble_ratio": b["roof_stats"]["bright_rubble_ratio"],
-                },
-            }
-
-    ordered_features = [features_by_idx[k] for k in sorted(features_by_idx.keys())]
-    geojson_out = {
-        "type": "FeatureCollection",
-        "properties": {
-            "grading_source": "muse-spark-1.3",
-            "model_id": "muse-spark-1.3",
-            "crs": WGS84_CRS,
-            "total_buildings": len(ordered_features),
-            "severity_distribution": severity_counts,
-        },
-        "features": ordered_features,
-    }
-    output_path.write_text(json.dumps(geojson_out, indent=2), encoding="utf-8")
+    n = max(1, totals["ok"])
     print(
-        f"Saved {len(ordered_features)} muse-spark-1.3 graded buildings to {output_path} "
-        f"in {time.perf_counter() - t0:.2f}s | counts={severity_counts}"
+        f"\nDone: {totals['ok']} graded, {totals['err']} errors. Tokens per building: "
+        f"prompt {totals['prompt'] / n:.0f}, completion {totals['completion'] / n:.0f} "
+        f"(reasoning {totals['reasoning'] / n:.0f}). Remaining: {len(buildings) - len(load_done())}",
+        flush=True,
     )
 
 
+def write_geojson() -> None:
+    buildings = load_buildings()
+    done = load_done()
+    missing = [b["building_id"] for b in buildings if b["building_id"] not in done]
+    if missing:
+        raise SystemExit(f"{len(missing)} buildings not graded yet (e.g. {missing[:3]}); run grading first")
+    counts: dict[str, int] = {}
+    features = []
+    for b in buildings:
+        rec = done[b["building_id"]]
+        sev = rec["damage_severity"]
+        counts[sev] = counts.get(sev, 0) + 1
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": mapping(b["geometry_wgs84"]),
+                "properties": {
+                    "building_id": b["building_id"],
+                    "building_type": b["building_type"],
+                    "damage_severity": sev,
+                    "building_damage_severity": sev,
+                    "is_high_severity": sev in ("major_damage", "destroyed"),
+                    "model_confidence": rec.get("model_confidence"),
+                    "grading_source": MODEL,
+                    "grading_method": GRADING_METHOD,
+                    "visual_cue_summary": f"[MUSE-SPARK-1.3 PRE/POST] {rec.get('visual_evidence', '')}",
+                },
+            }
+        )
+    GRADED_GEOJSON.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "properties": {
+                    "grading_source": MODEL,
+                    "grading_method": GRADING_METHOD,
+                    "pre_event": "USDA NAIP 2017",
+                    "post_event": "NOAA 2018-10-11",
+                    "total_buildings": len(features),
+                    "severity_distribution": counts,
+                },
+                "features": features,
+            }
+        ),
+        encoding="utf-8",
+    )
+    print(f"Saved {len(features)} per-building grades -> {GRADED_GEOJSON} {counts}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Grade buildings with Muse Spark from pre/post imagery")
+    parser.add_argument("--limit", type=int, default=None, help="grade at most N new buildings")
+    parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument("--effort", default="low", help="muse-spark reasoning_effort ('' for model default)")
+    parser.add_argument("--write-geojson", action="store_true", help="build the graded GeoJSON from the cache")
+    parser.add_argument("--preview", metavar="BUILDING_ID", help="save the composite image for one building")
+    args = parser.parse_args()
+
+    if args.preview:
+        b = next(b for b in load_buildings() if b["building_id"] == args.preview)
+        out = PROJECT_ROOT / f"{args.preview}_prepost.png"
+        out.write_bytes(composite_png(b["centroid_utm"], b["footprint_utm"]))
+        print(f"Saved {out}")
+    elif args.write_geojson:
+        write_geojson()
+    else:
+        asyncio.run(run_grading(args.limit, args.concurrency, args.effort or None))
+
+
 if __name__ == "__main__":
-    asyncio.run(run_grading())
+    main()
