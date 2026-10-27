@@ -14,3 +14,6 @@ data/*.tiff
 # Environment Secrets & OS files
 .env
 .DS_Store
+
+# Generated map tiles (scripts/build_map_tiles.py)
+data/tiles/

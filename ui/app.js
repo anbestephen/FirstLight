@@ -28,6 +28,7 @@
     selectedSegment: null,
     map: null,
     rasterOverlay: null,
+    rasterTiles: null,
     buildingsLayer: null,
     roadsLayer: null,
     routeLayer: null,
@@ -188,6 +189,18 @@
     state.rasterOverlay = L.imageOverlay("/api/raster-preview.png", imageBounds, {
       opacity: 0.55,
       interactive: false,
+    }).addTo(state.map);
+    // Full-resolution offline tiles (0.28 m) on top of the low-res preview, which stays as a
+    // fallback when tiles have not been built.
+    if (state.rasterTiles) {
+      state.map.removeLayer(state.rasterTiles);
+    }
+    state.rasterTiles = L.tileLayer("/tiles/post/{z}/{x}/{y}.jpg", {
+      minZoom: 13,
+      maxNativeZoom: 19,
+      maxZoom: 20,
+      bounds: L.latLngBounds(imageBounds),
+      opacity: 0.7,
     }).addTo(state.map);
 
     applyAoiViewportBounds(false);
@@ -1608,12 +1621,14 @@
     });
 
     document.getElementById("toggle-raster").addEventListener("change", function (ev) {
-      if (!state.rasterOverlay) return;
-      if (ev.target.checked) {
-        state.rasterOverlay.addTo(state.map);
-      } else {
-        state.map.removeLayer(state.rasterOverlay);
-      }
+      [state.rasterOverlay, state.rasterTiles].forEach(function (layer) {
+        if (!layer) return;
+        if (ev.target.checked) {
+          layer.addTo(state.map);
+        } else {
+          state.map.removeLayer(layer);
+        }
+      });
     });
 
     document.getElementById("toggle-buildings").addEventListener("change", function () {

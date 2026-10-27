@@ -708,6 +708,11 @@ app.add_middleware(
 
 app.include_router(labeling_router)
 
+TILES_DIR = DATA_DIR / "tiles"
+TILES_DIR.mkdir(parents=True, exist_ok=True)
+# Offline XYZ imagery tiles from scripts/build_map_tiles.py (missing tiles simply 404).
+app.mount("/tiles", StaticFiles(directory=str(TILES_DIR)), name="tiles")
+
 if VENDOR_DIR.exists():
     app.mount("/vendor", StaticFiles(directory=str(VENDOR_DIR)), name="vendor")
 if UI_DIR.exists():

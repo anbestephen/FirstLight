@@ -173,6 +173,11 @@ def download_missing_assets() -> None:
             check=True,
         )
 
+    tiles_dir = DATA_DIR / "tiles" / "post"
+    if not tiles_dir.exists():
+        print("[rebuild] Running scripts/build_map_tiles.py ...")
+        subprocess.run([sys.executable, str(PROJECT_ROOT / "scripts" / "build_map_tiles.py")], check=True)
+
     graded_geojson = DATA_DIR / "osm_buildings_graded.geojson"
     if not graded_geojson.exists():
         print("[rebuild] Running scripts/grade_buildings_muse_spark.py ...")

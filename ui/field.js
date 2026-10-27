@@ -77,7 +77,7 @@
       center: [29.9415, -85.4125],
       zoom: 15,
       minZoom: 13,
-      maxZoom: 19,
+      maxZoom: 20,
       zoomControl: false,
       attributionControl: false,
     });
@@ -99,6 +99,13 @@
     L.imageOverlay("/api/raster-preview.png", bounds, {
       opacity: 0.6,
       interactive: false,
+    }).addTo(state.map);
+    L.tileLayer("/tiles/post/{z}/{x}/{y}.jpg", {
+      minZoom: 13,
+      maxNativeZoom: 19,
+      maxZoom: 20,
+      bounds: bounds,
+      opacity: 0.75,
     }).addTo(state.map);
     state.map.setMaxBounds(bounds.pad(0.25));
     state.map.fitBounds(bounds);
