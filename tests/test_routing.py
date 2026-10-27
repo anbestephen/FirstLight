@@ -337,3 +337,20 @@ def test_real_mexico_beach_osm_graph_routing_and_roi() -> None:
     for i in range(len(roi_list) - 1):
         assert roi_list[i].clearance_roi >= roi_list[i + 1].clearance_roi
         assert roi_list[i].water_overlap_ratio == 0.0
+
+
+def test_ambulances_and_fire_engines_never_use_footways() -> None:
+    import networkx as nx
+
+    from src.routing import annotate_graph_with_geometry_metrics
+
+    G = nx.MultiDiGraph()
+    G.add_edge(1, 2, key=0, length_m=40.0, min_clear_width_m=6.0, highway="footway")
+    G.add_edge(2, 3, key=0, length_m=40.0, min_clear_width_m=6.0, highway="residential")
+    G.add_edge(3, 4, key=0, length_m=40.0, min_clear_width_m=6.0, highway=["track", "residential"])
+    A = annotate_graph_with_geometry_metrics(G)
+    foot = A[1][2][0]
+    assert foot["passable_atv"] is True
+    assert foot["passable_ambulance"] is False and foot["passable_fire_engine"] is False
+    assert A[2][3][0]["passable_fire_engine"] is True
+    assert A[3][4][0]["passable_ambulance"] is True  # mixed types are drivable

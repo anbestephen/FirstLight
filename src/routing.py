@@ -56,6 +56,16 @@ VEHICLE_MIN_WIDTH_M: dict[str, float] = {
     VehicleClass.FIRE_ENGINE.value: FIRE_ENGINE_MIN_WIDTH_M,  # 3.5m
 }
 
+# OSM ways that only ATVs / people on foot may use, whatever their measured width.
+PEDESTRIAN_HIGHWAYS = frozenset({"footway", "path", "steps", "pedestrian", "cycleway"})
+FOOT_ONLY_EXEMPT_VEHICLES = frozenset({VehicleClass.ATV.value})
+
+
+def is_pedestrian_only(highway: Any) -> bool:
+    types = highway if isinstance(highway, list) else [highway]
+    return all(str(t) in PEDESTRIAN_HIGHWAYS for t in types)
+
+
 VEHICLE_LABEL: dict[str, str] = {
     VehicleClass.ATV.value: "ATV / Foot (>=1.2m)",
     VehicleClass.AMBULANCE.value: "Ambulance / Pickup (>=2.2m)",
@@ -309,6 +319,7 @@ def annotate_graph_with_geometry_metrics(
         data["debris_area_m2"] = debris_sqm
         data["gsd_m_per_px"] = edge_gsd
 
+        foot_only = is_pedestrian_only(data.get("highway"))
         for vc in (
             VehicleClass.ATV.value,
             VehicleClass.AMBULANCE.value,
@@ -316,6 +327,8 @@ def annotate_graph_with_geometry_metrics(
         ):
             passable = is_edge_passable_for_vehicle(min_w, water_ratio, vc)
             weight = compute_edge_routing_weight(length_m, min_w, water_ratio, vc)
+            if foot_only and vc not in FOOT_ONLY_EXEMPT_VEHICLES:
+                passable, weight = False, math.inf
             data[f"passable_{vc}"] = passable
             data[f"weight_{vc}"] = weight
 
