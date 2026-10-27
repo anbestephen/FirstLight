@@ -44,8 +44,9 @@ class AgentContext:
 
 
 def _road_label(data: dict[str, Any], u: Any, v: Any) -> str:
+    # Grouping key for "the same road": unnamed segments are grouped as one "unnamed road".
     name = _format_edge_name(data.get("name"), u, v)
-    return "unnamed road" if name.startswith("Segment ") else name
+    return "unnamed road" if name.startswith("unnamed road") else name
 
 
 def _unique_edges(G: nx.MultiDiGraph):
@@ -135,9 +136,11 @@ class AgentTools:
 
     @staticmethod
     def _node_road(G: nx.MultiDiGraph, node: Any) -> str:
-        names = [_road_label(d, u, v) for u, v, d in G.edges(node, data=True)]
-        named = [n for n in names if n != "unnamed road"]
-        return named[0] if named else (names[0] if names else "unnamed road")
+        edges = list(G.edges(node, data=True))
+        named = [n for n in (_road_label(d, u, v) for u, v, d in edges) if n != "unnamed road"]
+        if named:
+            return named[0]
+        return str(edges[0][2].get("display_name") or "unnamed road") if edges else "unnamed road"
 
     # ---- tools ---------------------------------------------------------------------
     def measure_road(self, road_name: str) -> dict[str, Any]:
@@ -197,7 +200,7 @@ class AgentTools:
         if route.reachable:
             steps: list[dict[str, Any]] = []
             for st in route.edge_steps:
-                name = "unnamed road" if st.name.startswith("Segment ") else st.name
+                name = st.name
                 if steps and steps[-1]["road"] == name:
                     steps[-1]["length_m"] += st.length_m
                     steps[-1]["narrowest_m"] = min(steps[-1]["narrowest_m"], st.min_clear_width_m)
@@ -242,7 +245,7 @@ class AgentTools:
             "choke_points": [
                 {
                     "rank": r.rank,
-                    "road": "unnamed road" if r.road_name.startswith("Segment ") else r.road_name,
+                    "road": r.road_name,
                     "edge_id": f"{r.edge_u}-{r.edge_v}-{r.edge_key}",
                     "clear_width_now_m": round(r.current_clear_width_m, 1),
                     "clear_width_after_m": round(r.restored_clear_width_m, 1),

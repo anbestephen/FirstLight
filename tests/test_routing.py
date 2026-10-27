@@ -354,3 +354,22 @@ def test_ambulances_and_fire_engines_never_use_footways() -> None:
     assert foot["passable_ambulance"] is False and foot["passable_fire_engine"] is False
     assert A[2][3][0]["passable_fire_engine"] is True
     assert A[3][4][0]["passable_ambulance"] is True  # mixed types are drivable
+
+
+def test_unnamed_segments_get_names_from_connected_streets() -> None:
+    import networkx as nx
+
+    from src.routing import _format_edge_name, assign_display_names
+
+    G = nx.MultiDiGraph()
+    G.add_edge(1, 2, key=0, name="26th Street")
+    G.add_edge(2, 3, key=0)  # unnamed, touches 26th Street at node 2
+    G.add_edge(3, 4, key=0, name="US Highway 98")
+    G.add_edge(5, 6, key=0)  # isolated, no named neighbours
+    G.add_edge(2, 7, key=0)  # unnamed spur off 26th Street only
+    assign_display_names(G)
+    assert G[2][3][0]["display_name"] == "unnamed road between 26th Street and US Highway 98"
+    assert G[2][7][0]["display_name"] == "unnamed road off 26th Street"
+    assert G[5][6][0]["display_name"] == "unnamed road"
+    assert _format_edge_name(None, 2, 3, G[2][3][0]["display_name"]).startswith("unnamed road between")
+    assert _format_edge_name("26th Street", 1, 2) == "26th Street"

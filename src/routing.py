@@ -406,6 +406,7 @@ def load_annotated_routing_graph(
 
     if measurements_path is not None and Path(measurements_path).exists():
         apply_sam31_measurements(G, load_sam31_measurements(measurements_path))
+        assign_display_names(G)
         return annotate_graph_with_geometry_metrics(G)
 
     nodes_gdf, edges_gdf = ox.graph_to_gdfs(G)
@@ -449,6 +450,7 @@ def load_annotated_routing_graph(
             edge_data["mask_source"] = rec.mask_source
             edge_data["clearance_reason"] = rec.reason
 
+    assign_display_names(G)
     return annotate_graph_with_geometry_metrics(G)
 
 
@@ -535,14 +537,49 @@ def _select_best_parallel_edge(
     return best_k, edge_dict[best_k]
 
 
-def _format_edge_name(raw_name: Any, u: int | str, v: int | str) -> str:
+def _raw_road_name(raw_name: Any) -> str | None:
     if isinstance(raw_name, list):
         valid = [str(x) for x in raw_name if x]
-        return ", ".join(valid) if valid else f"Segment {u}->{v}"
+        return ", ".join(valid) if valid else None
     if raw_name is None or (isinstance(raw_name, float) and math.isnan(raw_name)):
-        return f"Segment {u}->{v}"
+        return None
     text = str(raw_name).strip()
-    return text if text else f"Segment {u}->{v}"
+    return text or None
+
+
+def _format_edge_name(
+    raw_name: Any, u: int | str, v: int | str, display_name: str | None = None
+) -> str:
+    """OSM road name, else the edge's `display_name` ("unnamed road off 26th Street")."""
+    return _raw_road_name(raw_name) or display_name or "unnamed road"
+
+
+def assign_display_names(G: nx.MultiDiGraph) -> None:
+    """
+    Name each unnamed OSM segment after the named streets it connects to, so responders see
+    "unnamed road off 26th Street" (or "between A and B") instead of node ids.
+    """
+    def named_at(node: Any) -> list[str]:
+        names: list[str] = []
+        for a, b, d in list(G.out_edges(node, data=True)) + list(G.in_edges(node, data=True)):
+            n = _raw_road_name(d.get("name"))
+            if n and n not in names:
+                names.append(n)
+        return names
+
+    for u, v, data in G.edges(data=True):
+        if _raw_road_name(data.get("name")):
+            continue
+        neighbours: list[str] = []
+        for n in named_at(u) + named_at(v):
+            if n not in neighbours:
+                neighbours.append(n)
+        if len(neighbours) >= 2:
+            data["display_name"] = f"unnamed road between {neighbours[0]} and {neighbours[1]}"
+        elif neighbours:
+            data["display_name"] = f"unnamed road off {neighbours[0]}"
+        else:
+            data["display_name"] = "unnamed road"
 
 
 def compute_shortest_route(
@@ -600,7 +637,7 @@ def compute_shortest_route(
                         "u": bu,
                         "v": bv,
                         "key": bk,
-                        "name": _format_edge_name(bdata.get("name"), bu, bv),
+                        "name": _format_edge_name(bdata.get("name"), bu, bv, bdata.get("display_name")),
                         "min_clear_width_m": round(float(bdata.get("min_clear_width_m", 0.0)), 2),
                         "debris_area_sqm": round(float(bdata.get("debris_area_sqm", 0.0)), 2),
                         "water_overlap_ratio": round(float(bdata.get("water_overlap_ratio", 0.0)), 4),
@@ -688,7 +725,7 @@ def compute_shortest_route(
         seg_width_m = float(edata.get("min_clear_width_m", 8.0))
         seg_debris = float(edata.get("debris_area_sqm", 0.0))
         seg_water = float(edata.get("water_overlap_ratio", 0.0))
-        seg_name = _format_edge_name(edata.get("name"), u, v)
+        seg_name = _format_edge_name(edata.get("name"), u, v, edata.get("display_name"))
 
         # Reduce effective speed by 30% when navigating partial debris corridors
         effective_speed = speed_mps * (0.7 if seg_debris > 0.0 else 1.0)
@@ -958,7 +995,7 @@ def rank_choke_point_clearance_roi(
             continue
 
         roi = float(unlocked_structures) / float(debris_sqm)
-        road_name = _format_edge_name(data.get("name"), u, v)
+        road_name = _format_edge_name(data.get("name"), u, v, data.get("display_name"))
         gsd = float(data.get("gsd_m_per_px", 0.2804))
 
         bottleneck_lonlat = data.get("bottleneck_lonlat")

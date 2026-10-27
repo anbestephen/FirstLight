@@ -530,7 +530,7 @@ class FirstLightState:
             ):
                 name_str = str(raw_name)
             else:
-                name_str = f"Segment {u}-{v}"
+                name_str = str(data.get("display_name") or "unnamed road")
 
             edge_id_str = f"{u}-{v}-{int(k)}"
             features.append(
@@ -621,7 +621,7 @@ def _edge_telemetry_and_crop(edge_id: str | int) -> tuple[str, GeometricTelemetr
     elif raw_name is not None and not (isinstance(raw_name, float) and math.isnan(raw_name)):
         road_name = str(raw_name)
     else:
-        road_name = f"Segment {u}-{v}"
+        road_name = str(edata.get("display_name") or "unnamed road")
 
     debris_sqm = float(edata.get("debris_area_sqm", 0.0))
     water_ratio = float(edata.get("water_overlap_ratio", 0.0))
@@ -1107,7 +1107,7 @@ def get_choke_point_caliper(edge_id: str) -> dict[str, Any]:
     ):
         road_name = str(raw_name)
     else:
-        road_name = f"Segment {u}-{v}"
+        road_name = str(edata.get("display_name") or "unnamed road")
 
     gsd_m_per_px = float(edata.get("gsd_m_per_px", state.raster_meta["gsd_m_per_px"]))
     sam_conf = float(edata.get("sam_confidence", 0.78))
@@ -1189,7 +1189,7 @@ def get_choke_point_recon_schematic_png(
     ):
         road_name = str(raw_name)
     else:
-        road_name = f"Segment {u}-{v}"
+        road_name = str(edata.get("display_name") or "unnamed road")
 
     schematic_bytes = state.meta_suite.generate_recon_schematic_png(
         crop_bytes,
@@ -1300,7 +1300,7 @@ async def post_voice_dispatch(req: VoiceDispatchRequest) -> dict[str, Any]:
             state.toggle_clear_edge(u, v, k)
             state.dispatch.bump(
                 "debris_cleared",
-                _field_road_label(_format_edge_name(edata.get("name"), u, v)),
+                _field_road_label(_format_edge_name(edata.get("name"), u, v, edata.get("display_name"))),
             )
 
     return result.model_dump()
@@ -1406,7 +1406,7 @@ async def post_benchmark_tiers(req: BenchmarkTiersRequest) -> dict[str, Any]:
     ):
         road_name = str(raw_name)
     else:
-        road_name = f"Segment {u}-{v}"
+        road_name = str(edata.get("display_name") or "unnamed road")
 
     min_clear_w = round(float(edata.get("min_clear_width_m", 8.0)), 2)
     debris_sqm = round(float(edata.get("debris_area_sqm", 0.0)), 2)
@@ -1695,7 +1695,12 @@ def post_simulate_clear(req: SimulateClearRequest) -> dict[str, Any]:
         road_label = ""
         if state.base_graph.has_edge(u_id, v_id, req.edge_key):
             road_label = _field_road_label(
-                _format_edge_name(state.base_graph[u_id][v_id][req.edge_key].get("name"), u_id, v_id)
+                _format_edge_name(
+                    state.base_graph[u_id][v_id][req.edge_key].get("name"),
+                    u_id,
+                    v_id,
+                    state.base_graph[u_id][v_id][req.edge_key].get("display_name"),
+                )
             )
         state.dispatch.bump("debris_cleared" if now_cleared else "clearance_undone", road_label)
     else:
