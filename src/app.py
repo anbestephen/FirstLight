@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import io
+import json
 import math
 import os
 from pathlib import Path
@@ -31,6 +32,8 @@ from rasterio.enums import Resampling
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, mapping
 from shapely.ops import transform as shapely_transform
 
+from src.agent import CommanderAgent
+from src.agent_tools import AgentContext, AgentTools
 from src.dispatch import DispatchAssignment, DispatchHub, detect_lan_ip, probe_tcp_uplink
 from src.failover import (
     ConnectivityTier,
@@ -79,6 +82,11 @@ BUILDINGS_GRADED_GEOJSON_PATH = DATA_DIR / "osm_buildings_graded.geojson"
 SAM31_MASKS_GEOJSON_PATH = DATA_DIR / "sam31_mexico_beach_masks.geojson"
 SAM31_MEASUREMENTS_PATH = DATA_DIR / "sam31_edge_measurements.json"
 RASTER_TIF_PATH = DATA_DIR / "noaa_michael_mexico_beach.tif"
+
+# Incident command post: the US-98 intersection that reaches the most severely damaged
+# buildings on the measured network (ties broken by having a named cross street).
+COMMAND_POST_NODE = 95827858
+COMMAND_POST_LABEL = "US-98 at 28th Street"
 
 
 class CoordinatePoint(BaseModel):
@@ -157,6 +165,13 @@ class BenchmarkTiersRequest(BaseModel):
     force_offline: bool = False
 
 
+class AgentAskRequest(BaseModel):
+    """Request payload for `POST /api/agent/ask`."""
+
+    question: str = Field(min_length=3, max_length=500)
+    force_offline: bool = False
+
+
 class DispatchRequest(BaseModel):
     """Request payload for `POST /api/dispatch` (commander -> field devices)."""
 
@@ -201,14 +216,18 @@ class FirstLightState:
         }
 
     def default_route_endpoints(self) -> tuple[tuple[float, float], tuple[float, float]]:
-        """Return the default `(origin, destination)` lon/lat pair: westernmost and easternmost nodes."""
+        """Return the default `(origin, destination)`: the command post and the easternmost node."""
         self.ensure_loaded()
         assert self.active_graph is not None
         nodes_sorted = sorted(
             self.active_graph.nodes(data=True),
             key=lambda item: float(item[1].get("x", 0.0)),
         )
-        o_data = nodes_sorted[0][1]
+        o_data = (
+            self.active_graph.nodes[COMMAND_POST_NODE]
+            if COMMAND_POST_NODE in self.active_graph
+            else nodes_sorted[0][1]
+        )
         d_data = nodes_sorted[-1][1]
         return (
             (float(o_data.get("x", 0.0)), float(o_data.get("y", 0.0))),
@@ -1033,28 +1052,15 @@ def get_layers() -> dict[str, Any]:
         },
     }
 
-    nodes_sorted = sorted(
-        state.active_graph.nodes(data=True),
-        key=lambda item: float(item[1].get("x", 0.0)),
-    )
-    origin_id, origin_data = nodes_sorted[0]
-    dest_id, dest_data = nodes_sorted[-1]
+    (o_lon, o_lat), (d_lon, d_lat) = state.default_route_endpoints()
 
     return {
         "roads": state.get_roads_geojson(),
         "buildings": state.get_buildings_geojson(),
         "raster_envelope": envelope_geojson,
         "bounds_wgs84": [min_lon, min_lat, max_lon, max_lat],
-        "default_origin": {
-            "node_id": origin_id,
-            "lon": float(origin_data.get("x", min_lon)),
-            "lat": float(origin_data.get("y", min_lat)),
-        },
-        "default_destination": {
-            "node_id": dest_id,
-            "lon": float(dest_data.get("x", max_lon)),
-            "lat": float(dest_data.get("y", max_lat)),
-        },
+        "default_origin": {"label": COMMAND_POST_LABEL, "lon": o_lon, "lat": o_lat},
+        "default_destination": {"lon": d_lon, "lat": d_lat},
         "vehicle_thresholds_m": VEHICLE_MIN_WIDTH_M,
         "cleared_edges": [
             {"u": u, "v": v, "key": k} for u, v, k in state.cleared_edges
@@ -1611,6 +1617,49 @@ def get_clearance_roi(
         ],
         "recommendations": [rec.to_dict() for rec in recommendations],
     }
+
+
+_agent: CommanderAgent | None = None
+
+
+def get_agent() -> CommanderAgent:
+    """Commander agent bound to the live graph, Muse Spark grades and field dispatch hub."""
+    global _agent
+    if _agent is None:
+        state.ensure_loaded()
+        ctx = AgentContext(
+            graph=lambda: state.active_graph,
+            buildings=lambda: state.get_buildings_geojson()["features"],
+            command_post_lonlat=lambda: state.default_route_endpoints()[0],
+            buildings_source=(
+                BUILDINGS_GRADED_GEOJSON_PATH if BUILDINGS_GRADED_GEOJSON_PATH.exists() else BUILDINGS_GEOJSON_PATH
+            ),
+            dispatch=state.dispatch,
+        )
+        _agent = CommanderAgent(
+            AgentTools(ctx),
+            api_key=state.router.api_key or None,
+            api_base_url=state.router.api_base_url,
+            reasoning_effort=state.router.cloud_reasoning_effort,
+            uplink_online=lambda: state.dispatch.uplink_online,
+            local_runtime=state.router.mlx_runtime,
+        )
+    return _agent
+
+
+@app.post("/api/agent/ask")
+async def post_agent_ask(req: AgentAskRequest) -> StreamingResponse:
+    """
+    Ask the commander agent a question. Streams newline-delimited JSON events: the tier in use,
+    each tool call and result, and the final answer with its number-verification report.
+    """
+    agent = get_agent()
+
+    async def events() -> AsyncIterator[bytes]:
+        async for event in agent.run(req.question, force_offline=req.force_offline):
+            yield (json.dumps(event) + "\n").encode("utf-8")
+
+    return StreamingResponse(events(), media_type="application/x-ndjson")
 
 
 @app.post("/api/edge-runtime/unload")

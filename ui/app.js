@@ -1374,6 +1374,174 @@
     }
   }
 
+  // ---- Ask FirstLight: commander agent (POST /api/agent/ask, streamed NDJSON) ----
+  const AGENT_TIER_LABELS = {
+    tier_1_cloud: "Muse Spark 1.3 · Meta Cloud",
+    tier_2_edge: "Llama 3.2 Vision · on this laptop",
+    tier_3_deterministic: "No model · rules + measured tools",
+  };
+
+  function escapeHtml(text) {
+    return String(text).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function summarizeToolResult(name, r) {
+    if (!r || r.error) return `⚠ ${r ? r.error : "no result"}`;
+    if (name === "measure_road") {
+      const ok = Object.keys(r.passable_end_to_end || {}).filter((k) => r.passable_end_to_end[k]);
+      return `${r.road}: narrowest ${r.narrowest_clear_width_m} m · passable for ${ok.length ? ok.join(", ") : "none"}`;
+    }
+    if (name === "damage_hotspots") {
+      return (r.hotspots || [])
+        .map((h) => `${h.id} near ${h.near_road}: ${h.high_severity_buildings} severe`)
+        .join(" · ");
+    }
+    if (name === "plan_route") {
+      return r.reachable
+        ? `${r.vehicle} → ${r.destination}: ${r.distance_km} km · ${r.eta_min} min`
+        : `${r.vehicle} → ${r.destination}: no passable route`;
+    }
+    if (name === "rank_clearance") {
+      const c = (r.choke_points || [])[0];
+      return c ? `#1 ${c.road}: ${c.debris_m2} m² debris → +${c.high_severity_buildings_unlocked} severe buildings` : "no clearance helps";
+    }
+    if (name === "reachability_summary") {
+      return `${r.reachable} of ${r.high_severity_buildings_total} severe buildings reachable`;
+    }
+    if (name === "dispatch_field_unit") {
+      return r.dispatched
+        ? `assignment sent to ${r.field_devices_notified} field device(s)`
+        : `not sent: ${r.reason}`;
+    }
+    return "";
+  }
+
+  function highlightNumbers(text, unverified) {
+    const bad = new Set(unverified || []);
+    // Street ordinals ("16th") are names, not measurements, so they are not highlighted.
+    return escapeHtml(text).replace(/(?<![\w.])\d+(?:[.,]\d+)?(?!st\b|nd\b|rd\b|th\b)/g, function (n) {
+      return `<span class="${bad.has(n) ? "num-bad" : "num-ok"}">${n}</span>`;
+    });
+  }
+
+  function applyAgentDispatch(result) {
+    if (!result || !result.dispatched) return;
+    state.vehicleClass = result.vehicle_class;
+    document.querySelectorAll(".vehicle-btn").forEach(function (b) {
+      b.classList.toggle("active", b.getAttribute("data-vehicle") === state.vehicleClass);
+    });
+    state.destination = { lon: result.destination_lonlat[0], lat: result.destination_lonlat[1] };
+    renderRoadsLayer();
+    refreshRoute();
+    refreshClearanceRoi();
+  }
+
+  async function askAgent(question) {
+    const q = String(question || "").trim();
+    if (q.length < 3) return;
+    const panel = document.getElementById("agent-panel");
+    const stepsEl = document.getElementById("agent-steps");
+    const answerEl = document.getElementById("agent-answer");
+    const verifyEl = document.getElementById("agent-verify");
+    const tierEl = document.getElementById("agent-tier");
+    const askBtn = document.getElementById("agent-ask-btn");
+    panel.classList.remove("hidden");
+    document.getElementById("agent-question").textContent = q;
+    stepsEl.innerHTML = "";
+    answerEl.innerHTML = `<span class="analyzing">Planning…</span>`;
+    verifyEl.textContent = "";
+    verifyEl.className = "agent-verify";
+    askBtn.disabled = true;
+    const pending = {};
+
+    function onEvent(ev) {
+      if (ev.type === "tier") {
+        tierEl.textContent = AGENT_TIER_LABELS[ev.tier] || ev.tier;
+        tierEl.classList.toggle("edge", ev.tier !== "tier_1_cloud");
+      } else if (ev.type === "fallback") {
+        const li = document.createElement("li");
+        li.className = "fallback";
+        li.textContent = `${AGENT_TIER_LABELS[ev.tier] || ev.tier} unavailable: ${ev.reason}. Falling back.`;
+        stepsEl.appendChild(li);
+      } else if (ev.type === "tool_call") {
+        const li = document.createElement("li");
+        const args = Object.values(ev.args || {}).map((a) => escapeHtml(a)).join(", ");
+        li.innerHTML = `<span class="tool-name">${escapeHtml(ev.name)}</span>(${args})<span class="tool-summary analyzing">running…</span>`;
+        stepsEl.appendChild(li);
+        pending[ev.name] = (pending[ev.name] || []).concat([li]);
+      } else if (ev.type === "tool_result") {
+        const li = (pending[ev.name] || []).shift();
+        if (li) {
+          const s = li.querySelector(".tool-summary");
+          s.classList.remove("analyzing");
+          s.textContent = summarizeToolResult(ev.name, ev.result);
+        }
+        if (ev.name === "dispatch_field_unit") applyAgentDispatch(ev.result);
+      } else if (ev.type === "revision") {
+        const li = document.createElement("li");
+        li.className = "fallback";
+        li.textContent = `Numbers ${ev.unverified.join(", ")} not found in tool results; asking the model to rewrite.`;
+        stepsEl.appendChild(li);
+      } else if (ev.type === "answer") {
+        const v = ev.verification || { total: 0, verified: 0, unverified: [] };
+        answerEl.innerHTML = highlightNumbers(ev.text, v.unverified);
+        const ok = v.unverified.length === 0;
+        verifyEl.className = `agent-verify ${ok ? "ok" : "bad"}`;
+        verifyEl.textContent =
+          (ok ? `✓ ${v.verified}/${v.total} numbers traced to tool results` : `⚠ ${v.unverified.length} number(s) not traceable: ${v.unverified.join(", ")}`) +
+          ` · ${AGENT_TIER_LABELS[ev.tier] || ev.tier} · ${(ev.latency_ms / 1000).toFixed(1)} s`;
+      }
+    }
+
+    try {
+      const res = await fetch("/api/agent/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: q, force_offline: Boolean(state.forceOffline) }),
+      });
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, nl).trim();
+          buffer = buffer.slice(nl + 1);
+          if (line) onEvent(JSON.parse(line));
+        }
+      }
+    } catch (err) {
+      answerEl.textContent = `Agent unavailable: ${err.message}`;
+    } finally {
+      askBtn.disabled = false;
+      refreshMetaModelsTelemetry();
+    }
+  }
+
+  function bindAgentUi() {
+    const form = document.getElementById("agent-form");
+    const input = document.getElementById("agent-input");
+    if (!form || !input) return;
+    form.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      askAgent(input.value);
+    });
+    document.querySelectorAll(".agent-chip").forEach(function (chip) {
+      chip.addEventListener("click", function () {
+        input.value = chip.getAttribute("data-q");
+        askAgent(input.value);
+      });
+    });
+    document.getElementById("agent-close").addEventListener("click", function () {
+      document.getElementById("agent-panel").classList.add("hidden");
+    });
+  }
+
   function switchTab(tabId) {
     document.querySelectorAll(".panel-tab").forEach(function (btn) {
       btn.classList.toggle("active", btn.getAttribute("data-tab") === tabId);
@@ -1525,6 +1693,7 @@
   document.addEventListener("DOMContentLoaded", async function () {
     initMap();
     bindUiEvents();
+    bindAgentUi();
     connectFieldLinkStatus();
     await fetchHealth();
     await loadInitialLayers();

@@ -110,12 +110,37 @@
     </div>
   </section>
 
+  <!-- Ask FirstLight: Muse Spark commander agent -->
+  <section class="agent-bar" id="agent-bar" aria-label="Ask FirstLight">
+    <form class="agent-form" id="agent-form" autocomplete="off">
+      <span class="demo-bar-label">ASK FIRSTLIGHT:</span>
+      <input type="text" id="agent-input" class="agent-input" maxlength="500"
+             placeholder="e.g. Get an ambulance to the worst-hit block" aria-label="Ask the commander agent" />
+      <button type="submit" class="action-btn agent-ask-btn" id="agent-ask-btn">Ask</button>
+    </form>
+    <div class="agent-suggestions">
+      <button type="button" class="agent-chip" data-q="Get an ambulance to the worst-hit block">Ambulance to worst-hit block</button>
+      <button type="button" class="agent-chip" data-q="Which debris pile should we clear first for fire engines?">What to clear first?</button>
+      <button type="button" class="agent-chip" data-q="Is 15th Street passable for an ambulance?">Is 15th Street passable?</button>
+    </div>
+  </section>
+
   <!-- Main Responsive Workspace -->
   <main class="workspace">
     <!-- Map Viewport -->
     <section class="map-section">
       <div id="map" class="map-canvas" aria-label="Mexico Beach Tactical Map"></div>
       <div class="caliper-scan-readout hidden" id="caliper-scan-readout" role="status" aria-live="polite"></div>
+      <aside class="agent-panel hidden" id="agent-panel" aria-live="polite">
+        <div class="agent-panel-head">
+          <span class="agent-tier" id="agent-tier">—</span>
+          <button type="button" class="agent-close" id="agent-close" aria-label="Close">×</button>
+        </div>
+        <div class="agent-question" id="agent-question"></div>
+        <ol class="agent-steps" id="agent-steps"></ol>
+        <div class="agent-answer" id="agent-answer"></div>
+        <div class="agent-verify" id="agent-verify"></div>
+      </aside>
 
       <!-- Floating Map Controls & Legend -->
       <div class="map-overlay-bar">
