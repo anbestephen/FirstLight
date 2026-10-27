@@ -65,7 +65,7 @@ def test_layers_endpoint_returns_cached_geojson_and_envelope() -> None:
     assert len(data["buildings"]["features"]) == 334
     sample_bldg_props = data["buildings"]["features"][0]["properties"]
     assert sample_bldg_props["grading_source"] == "muse-spark-1.3"
-    assert "[MUSE-SPARK-1.3 CLOUD VLM]" in sample_bldg_props["visual_cue_summary"]
+    assert sample_bldg_props["visual_cue_summary"].startswith("[MUSE-SPARK-1.3 PRE/POST]")
 
     assert data["raster_envelope"]["type"] == "Feature"
     assert data["raster_envelope"]["geometry"]["type"] == "Polygon"
