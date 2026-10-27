@@ -152,7 +152,18 @@ Reported metrics: width MAE / bias / RMSE, per-vehicle passability agreement wit
 ./.venv/bin/python benchmarks/run_benchmarks.py  # writes benchmarks/benchmark_results.json
 ```
 
-_Results are published here once labelling is complete._
+### Baseline results (40 roads, 40 buildings, labelled blind on Oct 27, 2026)
+
+| Measure | Result | Reading |
+| :--- | :---: | :--- |
+| SAM 3.1 width, median absolute error | **1.95 m** | Mean 3.45 m; bias **+2.2 m** (SAM reads roads too wide) |
+| Debris-blocked cross-sections detected (SAM 0 m where human 0 m) | **7 / 7** | Debris masks are reliable |
+| Passability agreement, ATV / ambulance / fire engine | **78% / 83% / 80%** | False-passable (dangerous): 5 / 3 / 5 of 40 |
+| SAM "not visible" stations a human could measure | 4 / 6 | Missed pavement, treated as blocked (conservative) |
+| Muse Spark building grade within one class | **88%** | Exact 4-class match 58% |
+| High-severity recall / precision | **1.00 / 0.38** | Never missed a severe building; over-grades major as destroyed |
+
+Main failure modes: SAM's `road` mask spills into parking lots, intersections and sand overwash (largest errors hit the 30 m ray limit), and occasionally misses pavement. These baselines are reported before any tuning; later improvements are evaluated on samples not used for tuning.
 
 ---
 

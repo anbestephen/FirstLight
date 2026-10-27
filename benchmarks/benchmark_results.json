@@ -5,11 +5,371 @@
     "buildings": "data/ground_truth/building_damage_manual.json"
   },
   "road_widths_sam31": {
-    "labeled": 0,
-    "cant_tell": 0
+    "labeled": 40,
+    "cant_tell": 0,
+    "mae_m": 3.453,
+    "median_abs_error_m": 1.945,
+    "rmse_m": 5.656,
+    "bias_m": 2.221,
+    "passability": {
+      "atv": {
+        "agreement": 0.775,
+        "false_passable": 5,
+        "false_blocked": 4
+      },
+      "ambulance": {
+        "agreement": 0.825,
+        "false_passable": 3,
+        "false_blocked": 4
+      },
+      "fire_engine": {
+        "agreement": 0.8,
+        "false_passable": 5,
+        "false_blocked": 3
+      }
+    },
+    "confidence_calibration": [
+      {
+        "confidence": "0.0-0.6",
+        "n": 4,
+        "mae_m": 5.015,
+        "ambulance_agreement": 0.5
+      },
+      {
+        "confidence": "0.6-0.8",
+        "n": 8,
+        "mae_m": 4.013,
+        "ambulance_agreement": 1.0
+      },
+      {
+        "confidence": "0.8-1.0",
+        "n": 28,
+        "mae_m": 3.069,
+        "ambulance_agreement": 0.8214
+      }
+    ],
+    "sam_not_visible_stations": {
+      "n": 6,
+      "human_blocked": 2,
+      "human_cant_tell": 0
+    },
+    "pairs": [
+      {
+        "sample_id": "road-01",
+        "human_width_m": 6.83,
+        "sam_width_m": 6.75,
+        "sam_cause": "clear",
+        "sam_confidence": 0.422
+      },
+      {
+        "sample_id": "road-02",
+        "human_width_m": 14.85,
+        "sam_width_m": 18.25,
+        "sam_cause": "narrowed_debris",
+        "sam_confidence": 0.916
+      },
+      {
+        "sample_id": "road-03",
+        "human_width_m": 5.67,
+        "sam_width_m": 8.5,
+        "sam_cause": "clear",
+        "sam_confidence": 0.879
+      },
+      {
+        "sample_id": "road-04",
+        "human_width_m": 3.34,
+        "sam_width_m": 5.75,
+        "sam_cause": "clear",
+        "sam_confidence": 0.911
+      },
+      {
+        "sample_id": "road-05",
+        "human_width_m": 3.4,
+        "sam_width_m": 7.5,
+        "sam_cause": "clear",
+        "sam_confidence": 0.854
+      },
+      {
+        "sample_id": "road-06",
+        "human_width_m": 3.71,
+        "sam_width_m": 4.5,
+        "sam_cause": "clear",
+        "sam_confidence": 0.933
+      },
+      {
+        "sample_id": "road-07",
+        "human_width_m": 0.0,
+        "sam_width_m": 0.0,
+        "sam_cause": "debris",
+        "sam_confidence": 0.749
+      },
+      {
+        "sample_id": "road-08",
+        "human_width_m": 0.0,
+        "sam_width_m": 0.0,
+        "sam_cause": "debris",
+        "sam_confidence": 0.829
+      },
+      {
+        "sample_id": "road-09",
+        "human_width_m": 5.9,
+        "sam_width_m": 7.75,
+        "sam_cause": "clear",
+        "sam_confidence": 0.877
+      },
+      {
+        "sample_id": "road-10",
+        "human_width_m": 0.0,
+        "sam_width_m": 0.0,
+        "sam_cause": "debris",
+        "sam_confidence": 0.948
+      },
+      {
+        "sample_id": "road-11",
+        "human_width_m": 5.71,
+        "sam_width_m": 7.0,
+        "sam_cause": "clear",
+        "sam_confidence": 0.918
+      },
+      {
+        "sample_id": "road-12",
+        "human_width_m": 0.0,
+        "sam_width_m": 2.5,
+        "sam_cause": "clear",
+        "sam_confidence": 0.544
+      },
+      {
+        "sample_id": "road-13",
+        "human_width_m": 0.0,
+        "sam_width_m": 0.0,
+        "sam_cause": "debris",
+        "sam_confidence": 0.998
+      },
+      {
+        "sample_id": "road-14",
+        "human_width_m": 6.29,
+        "sam_width_m": 6.5,
+        "sam_cause": "clear",
+        "sam_confidence": 0.934
+      },
+      {
+        "sample_id": "road-15",
+        "human_width_m": 8.47,
+        "sam_width_m": 0.0,
+        "sam_cause": "not_visible",
+        "sam_confidence": 0.878
+      },
+      {
+        "sample_id": "road-16",
+        "human_width_m": 5.05,
+        "sam_width_m": 7.5,
+        "sam_cause": "clear",
+        "sam_confidence": 0.806
+      },
+      {
+        "sample_id": "road-17",
+        "human_width_m": 0.0,
+        "sam_width_m": 1.75,
+        "sam_cause": "narrowed_debris",
+        "sam_confidence": 0.899
+      },
+      {
+        "sample_id": "road-18",
+        "human_width_m": 0.0,
+        "sam_width_m": 0.0,
+        "sam_cause": "debris",
+        "sam_confidence": 0.825
+      },
+      {
+        "sample_id": "road-19",
+        "human_width_m": 7.01,
+        "sam_width_m": 18.0,
+        "sam_cause": "narrowed_debris",
+        "sam_confidence": 0.69
+      },
+      {
+        "sample_id": "road-20",
+        "human_width_m": 0.0,
+        "sam_width_m": 0.0,
+        "sam_cause": "debris",
+        "sam_confidence": 0.902
+      },
+      {
+        "sample_id": "road-21",
+        "human_width_m": 5.46,
+        "sam_width_m": 6.25,
+        "sam_cause": "narrowed_debris",
+        "sam_confidence": 0.798
+      },
+      {
+        "sample_id": "road-22",
+        "human_width_m": 0.0,
+        "sam_width_m": 0.0,
+        "sam_cause": "debris",
+        "sam_confidence": 0.889
+      },
+      {
+        "sample_id": "road-23",
+        "human_width_m": 4.44,
+        "sam_width_m": 4.0,
+        "sam_cause": "clear",
+        "sam_confidence": 0.927
+      },
+      {
+        "sample_id": "road-24",
+        "human_width_m": 7.11,
+        "sam_width_m": 9.0,
+        "sam_cause": "narrowed_debris",
+        "sam_confidence": 0.719
+      },
+      {
+        "sample_id": "road-25",
+        "human_width_m": 6.6,
+        "sam_width_m": 21.75,
+        "sam_cause": "narrowed_debris",
+        "sam_confidence": 0.793
+      },
+      {
+        "sample_id": "road-26",
+        "human_width_m": 6.47,
+        "sam_width_m": 7.75,
+        "sam_cause": "clear",
+        "sam_confidence": 0.766
+      },
+      {
+        "sample_id": "road-27",
+        "human_width_m": 6.67,
+        "sam_width_m": 7.75,
+        "sam_cause": "clear",
+        "sam_confidence": 0.946
+      },
+      {
+        "sample_id": "road-28",
+        "human_width_m": 3.78,
+        "sam_width_m": 8.25,
+        "sam_cause": "clear",
+        "sam_confidence": 0.807
+      },
+      {
+        "sample_id": "road-29",
+        "human_width_m": 0.0,
+        "sam_width_m": 0.0,
+        "sam_cause": "not_visible",
+        "sam_confidence": 0.912
+      },
+      {
+        "sample_id": "road-30",
+        "human_width_m": 3.3,
+        "sam_width_m": 5.5,
+        "sam_cause": "narrowed_debris",
+        "sam_confidence": 0.92
+      },
+      {
+        "sample_id": "road-31",
+        "human_width_m": 0.0,
+        "sam_width_m": 5.25,
+        "sam_cause": "clear",
+        "sam_confidence": 0.908
+      },
+      {
+        "sample_id": "road-32",
+        "human_width_m": 0.0,
+        "sam_width_m": 2.0,
+        "sam_cause": "clear",
+        "sam_confidence": 0.635
+      },
+      {
+        "sample_id": "road-33",
+        "human_width_m": 4.36,
+        "sam_width_m": 0.0,
+        "sam_cause": "not_visible",
+        "sam_confidence": 0.985
+      },
+      {
+        "sample_id": "road-34",
+        "human_width_m": 0.0,
+        "sam_width_m": 9.25,
+        "sam_cause": "clear",
+        "sam_confidence": 0.894
+      },
+      {
+        "sample_id": "road-35",
+        "human_width_m": 0.0,
+        "sam_width_m": 0.0,
+        "sam_cause": "not_visible",
+        "sam_confidence": 0.646
+      },
+      {
+        "sample_id": "road-36",
+        "human_width_m": 9.43,
+        "sam_width_m": 30.25,
+        "sam_cause": "clear",
+        "sam_confidence": 0.976
+      },
+      {
+        "sample_id": "road-37",
+        "human_width_m": 3.02,
+        "sam_width_m": 0.0,
+        "sam_cause": "not_visible",
+        "sam_confidence": 0.989
+      },
+      {
+        "sample_id": "road-38",
+        "human_width_m": 8.26,
+        "sam_width_m": 0.0,
+        "sam_cause": "not_visible",
+        "sam_confidence": 0.286
+      },
+      {
+        "sample_id": "road-39",
+        "human_width_m": 5.25,
+        "sam_width_m": 10.75,
+        "sam_cause": "clear",
+        "sam_confidence": 0.865
+      },
+      {
+        "sample_id": "road-40",
+        "human_width_m": 5.78,
+        "sam_width_m": 15.0,
+        "sam_cause": "clear",
+        "sam_confidence": 0.44
+      }
+    ]
   },
   "building_damage": {
-    "labeled": 0,
-    "grading_source": "muse-spark-1.3"
+    "labeled": 40,
+    "grading_source": "muse-spark-1.3 per-building pre/post (NAIP 2017 vs NOAA 2018)",
+    "four_class_accuracy": 0.575,
+    "within_one_grade": 0.875,
+    "high_severity_accuracy": 0.8,
+    "high_severity_precision": 0.3846,
+    "high_severity_recall": 1.0,
+    "high_severity_f1": 0.5556,
+    "confusion": {
+      "no_damage": {
+        "no_damage": 20,
+        "minor_damage": 0,
+        "major_damage": 0,
+        "destroyed": 2
+      },
+      "minor_damage": {
+        "no_damage": 4,
+        "minor_damage": 3,
+        "major_damage": 3,
+        "destroyed": 3
+      },
+      "major_damage": {
+        "no_damage": 0,
+        "minor_damage": 0,
+        "major_damage": 0,
+        "destroyed": 5
+      },
+      "destroyed": {
+        "no_damage": 0,
+        "minor_damage": 0,
+        "major_damage": 0,
+        "destroyed": 0
+      }
+    }
   }
 }

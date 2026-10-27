@@ -1,0 +1,204 @@
+{
+ "labels": {
+  "bldg-01": {
+   "grade": "major_damage",
+   "building_id": "bldg-3",
+   "labeled_at": "2026-10-27T17:19:09.188629+00:00"
+  },
+  "bldg-02": {
+   "grade": "minor_damage",
+   "building_id": "bldg-12",
+   "labeled_at": "2026-10-27T17:19:14.136069+00:00"
+  },
+  "bldg-03": {
+   "grade": "no_damage",
+   "building_id": "bldg-17",
+   "labeled_at": "2026-10-27T17:19:20.757336+00:00"
+  },
+  "bldg-04": {
+   "grade": "major_damage",
+   "building_id": "bldg-38",
+   "labeled_at": "2026-10-27T17:19:23.101154+00:00"
+  },
+  "bldg-05": {
+   "grade": "no_damage",
+   "building_id": "bldg-43",
+   "labeled_at": "2026-10-27T17:19:25.094615+00:00"
+  },
+  "bldg-06": {
+   "grade": "no_damage",
+   "building_id": "bldg-59",
+   "labeled_at": "2026-10-27T17:19:26.959366+00:00"
+  },
+  "bldg-07": {
+   "grade": "minor_damage",
+   "building_id": "bldg-65",
+   "labeled_at": "2026-10-27T17:19:35.781852+00:00"
+  },
+  "bldg-08": {
+   "grade": "major_damage",
+   "building_id": "bldg-67",
+   "labeled_at": "2026-10-27T17:19:38.179612+00:00"
+  },
+  "bldg-09": {
+   "grade": "minor_damage",
+   "building_id": "bldg-85",
+   "labeled_at": "2026-10-27T17:19:41.951988+00:00"
+  },
+  "bldg-10": {
+   "grade": "no_damage",
+   "building_id": "bldg-96",
+   "labeled_at": "2026-10-27T17:19:45.871811+00:00"
+  },
+  "bldg-11": {
+   "grade": "no_damage",
+   "building_id": "bldg-113",
+   "labeled_at": "2026-10-27T17:19:47.293215+00:00"
+  },
+  "bldg-12": {
+   "grade": "no_damage",
+   "building_id": "bldg-114",
+   "labeled_at": "2026-10-27T17:19:48.458891+00:00"
+  },
+  "bldg-13": {
+   "grade": "no_damage",
+   "building_id": "bldg-115",
+   "labeled_at": "2026-10-27T17:19:53.027631+00:00"
+  },
+  "bldg-14": {
+   "grade": "minor_damage",
+   "building_id": "bldg-124",
+   "labeled_at": "2026-10-27T17:19:58.238763+00:00"
+  },
+  "bldg-15": {
+   "grade": "minor_damage",
+   "building_id": "bldg-136",
+   "labeled_at": "2026-10-27T17:20:03.538569+00:00"
+  },
+  "bldg-16": {
+   "grade": "major_damage",
+   "building_id": "bldg-144",
+   "labeled_at": "2026-10-27T17:20:05.658583+00:00"
+  },
+  "bldg-17": {
+   "grade": "minor_damage",
+   "building_id": "bldg-150",
+   "labeled_at": "2026-10-27T17:20:09.584207+00:00"
+  },
+  "bldg-18": {
+   "grade": "minor_damage",
+   "building_id": "bldg-152",
+   "labeled_at": "2026-10-27T17:20:11.144596+00:00"
+  },
+  "bldg-19": {
+   "grade": "no_damage",
+   "building_id": "bldg-164",
+   "labeled_at": "2026-10-27T17:20:16.256304+00:00"
+  },
+  "bldg-20": {
+   "grade": "no_damage",
+   "building_id": "bldg-175",
+   "labeled_at": "2026-10-27T17:20:22.109335+00:00"
+  },
+  "bldg-21": {
+   "grade": "no_damage",
+   "building_id": "bldg-178",
+   "labeled_at": "2026-10-27T17:20:24.573371+00:00"
+  },
+  "bldg-22": {
+   "grade": "minor_damage",
+   "building_id": "bldg-183",
+   "labeled_at": "2026-10-27T17:20:26.663125+00:00"
+  },
+  "bldg-23": {
+   "grade": "no_damage",
+   "building_id": "bldg-196",
+   "labeled_at": "2026-10-27T17:20:29.878477+00:00"
+  },
+  "bldg-24": {
+   "grade": "no_damage",
+   "building_id": "bldg-205",
+   "labeled_at": "2026-10-27T17:20:31.878189+00:00"
+  },
+  "bldg-25": {
+   "grade": "major_damage",
+   "building_id": "bldg-206",
+   "labeled_at": "2026-10-27T17:20:34.702179+00:00"
+  },
+  "bldg-26": {
+   "grade": "no_damage",
+   "building_id": "bldg-239",
+   "labeled_at": "2026-10-27T17:20:36.443776+00:00"
+  },
+  "bldg-27": {
+   "grade": "no_damage",
+   "building_id": "bldg-242",
+   "labeled_at": "2026-10-27T17:20:37.930096+00:00"
+  },
+  "bldg-28": {
+   "grade": "minor_damage",
+   "building_id": "bldg-251",
+   "labeled_at": "2026-10-27T17:20:41.139222+00:00"
+  },
+  "bldg-29": {
+   "grade": "no_damage",
+   "building_id": "bldg-261",
+   "labeled_at": "2026-10-27T17:20:42.717837+00:00"
+  },
+  "bldg-30": {
+   "grade": "no_damage",
+   "building_id": "bldg-264",
+   "labeled_at": "2026-10-27T17:20:44.213003+00:00"
+  },
+  "bldg-31": {
+   "grade": "no_damage",
+   "building_id": "bldg-267",
+   "labeled_at": "2026-10-27T17:20:45.422746+00:00"
+  },
+  "bldg-32": {
+   "grade": "no_damage",
+   "building_id": "bldg-270",
+   "labeled_at": "2026-10-27T17:20:47.506350+00:00"
+  },
+  "bldg-33": {
+   "grade": "no_damage",
+   "building_id": "bldg-271",
+   "labeled_at": "2026-10-27T17:20:48.809552+00:00"
+  },
+  "bldg-34": {
+   "grade": "no_damage",
+   "building_id": "bldg-272",
+   "labeled_at": "2026-10-27T17:20:50.689435+00:00"
+  },
+  "bldg-35": {
+   "grade": "minor_damage",
+   "building_id": "bldg-275",
+   "labeled_at": "2026-10-27T17:20:54.469166+00:00"
+  },
+  "bldg-36": {
+   "grade": "no_damage",
+   "building_id": "bldg-278",
+   "labeled_at": "2026-10-27T17:20:56.103442+00:00"
+  },
+  "bldg-37": {
+   "grade": "minor_damage",
+   "building_id": "bldg-294",
+   "labeled_at": "2026-10-27T17:20:59.784688+00:00"
+  },
+  "bldg-38": {
+   "grade": "minor_damage",
+   "building_id": "bldg-296",
+   "labeled_at": "2026-10-27T17:21:01.424974+00:00"
+  },
+  "bldg-39": {
+   "grade": "no_damage",
+   "building_id": "bldg-304",
+   "labeled_at": "2026-10-27T17:21:04.356685+00:00"
+  },
+  "bldg-40": {
+   "grade": "minor_damage",
+   "building_id": "bldg-324",
+   "labeled_at": "2026-10-27T17:21:09.430406+00:00"
+  }
+ }
+}
