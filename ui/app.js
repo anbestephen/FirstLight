@@ -1084,7 +1084,11 @@
 
     // Update Corridor AI Inspector dock
     document.getElementById("inspector-tier-pill").textContent = formattedTier;
-    document.getElementById("inspector-road-name").textContent = data.target_id || String(edgeId);
+    // The caliper response carries the readable road name; only fall back to the id without it.
+    const caliperProps = (state.lastCaliperGeojson && state.lastCaliperGeojson.properties) || {};
+    if (caliperProps.edge_id !== String(edgeId)) {
+      document.getElementById("inspector-road-name").textContent = data.target_id || String(edgeId);
+    }
     document.getElementById("inspector-latency-row").innerHTML =
       `Latency: <strong>${data.latency_ms} ms</strong> &bull; ` +
       (data.cloud_cache_hit
