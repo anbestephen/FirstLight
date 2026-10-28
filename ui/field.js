@@ -232,7 +232,7 @@
     const conn = snapshot.connectivity || {};
     const aiPill = document.getElementById("ai-pill");
     const onEdge = conn.ai_tier === "tier_2_edge";
-    aiPill.textContent = onEdge ? "AI: On-device Llama" : "AI: Meta Cloud";
+    aiPill.textContent = onEdge ? "AI: On-device Muse Glimmer" : "AI: Meta Cloud";
     aiPill.classList.toggle("ai-edge", onEdge);
     aiPill.classList.toggle("ai-cloud", !onEdge);
     const banner = document.getElementById("uplink-banner");

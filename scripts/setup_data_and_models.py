@@ -2,7 +2,7 @@
 
 Verifies the presence and structural integrity of all pre-staged geospatial datasets,
 baked SAM 3.1 segmentation polygons, Muse Spark 1.3 graded building footprints, and
-local model weights (`models/sam3.1` and `models/Llama-3.2-11B-Vision-Instruct-4bit`).
+local model weights (`models/sam3.1` and `models/Muse-Glimmer-30B-4bit`).
 
 Usage:
     ./.venv/bin/python scripts/setup_data_and_models.py --check
@@ -28,7 +28,7 @@ NOAA_GEOTIFF_URL = (
     "20181011a_299230_0854230_rgb.tif"
 )
 SAM31_HF_REPO = "facebook/sam3.1"
-MLX_VLM_HF_REPO = "mlx-community/Llama-3.2-11B-Vision-Instruct-4bit"
+MLX_VLM_HF_REPO = "mlx-community/Muse-Glimmer-30B-4bit"
 
 
 def verify_environment() -> tuple[bool, list[dict]]:
@@ -82,8 +82,8 @@ def verify_environment() -> tuple[bool, list[dict]]:
             100_000_000,
         ),
         (
-            "Apple Silicon MLX 4-bit Llama 3.2 11B Vision Config",
-            MODELS_DIR / "Llama-3.2-11B-Vision-Instruct-4bit" / "config.json",
+            "Apple Silicon MLX 4-bit Muse Glimmer 30B Config",
+            MODELS_DIR / "Muse-Glimmer-30B-4bit" / "config.json",
             100,
         ),
     ]
@@ -158,7 +158,7 @@ def download_missing_assets() -> None:
 
         snapshot_download(repo_id=SAM31_HF_REPO, local_dir=str(sam_dir))
 
-    mlx_dir = MODELS_DIR / "Llama-3.2-11B-Vision-Instruct-4bit"
+    mlx_dir = MODELS_DIR / "Muse-Glimmer-30B-4bit"
     if not (mlx_dir / "config.json").exists():
         print(f"[download] Downloading {MLX_VLM_HF_REPO} -> {mlx_dir} ...")
         from huggingface_hub import snapshot_download

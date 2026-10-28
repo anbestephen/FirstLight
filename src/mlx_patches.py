@@ -1,5 +1,5 @@
 """
-Performance patches for the local Tier 2 Llama 3.2 Vision runtime (`mlx-vlm`).
+Performance patch for Llama 3.2 Vision on `mlx-vlm` (the earlier Tier 2 model; a no-op for Muse Glimmer).
 
 `mlx-vlm` 0.7.x feeds the projected image features back into every decode step, and each of
 the 8 mllama cross-attention layers re-runs its `k_proj`/`v_proj` over all 6,404 vision

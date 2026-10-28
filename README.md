@@ -21,7 +21,7 @@ Damage maps (xView2, Microsoft and others) show *what* is destroyed. After a hur
 | **Building damage from before/after imagery** | Muse Spark grades all 334 buildings from a 2017 (before) / 2018 (after) image pair. |
 | **What to clear first** | Ranks debris piles by severely damaged buildings unlocked per m² cleared. |
 | **Commander agent with verified answers** | Ask in plain language. Muse Spark calls deterministic tools, and **every number in its answer is checked against the tool results**. |
-| **Three-tier failover** | Meta Cloud (Muse Spark) → Llama 3.2 Vision on the laptop (MLX, 4-bit) → no-model geometry and routing. The map never goes dark. |
+| **Three-tier failover** | Meta Cloud (Muse Spark) → Muse Glimmer 30B on the laptop (MLX, 4-bit) → no-model geometry and routing. The map never goes dark. |
 | **Live field phones over local Wi-Fi** | Phones follow the commander's dispatch in real time and detect internet loss within about 5 s. |
 | **Honest, held-out benchmark** | Model outputs are scored against blind hand labels; tuning and test sets are separate. |
 
@@ -38,7 +38,7 @@ Damage maps (xView2, Microsoft and others) show *what* is destroyed. After a hur
 | :--- | :--- | :--- |
 | **SAM 3.1** (`Sam3Model`, fp16) | Locally on Apple Silicon (PyTorch MPS) | Text-prompted segmentation (`road`, `debris`, `standing water`) on 89 road tiles; the probability maps drive the 5 m width measurements. Baked once (~5 min on an M1 Max), so the field laptop needs no GPU work at demo time. |
 | **Muse Spark 1.3** (`muse-spark-1.3`) | Meta Model API | (1) Grades each building from a before/after image pair (xBD scale). (2) Plans the commander agent's tool calls with native function calling and writes the answer. (3) Grades a selected road corridor from its aerial crop. |
-| **Llama 3.2 11B Vision Instruct, 4-bit** | Locally on Apple Silicon (MLX) | Offline fallback for grading and for the agent (same tools via a JSON action protocol). Kept resident in memory; a cross-attention key/value memo for mlx-vlm 0.7.x cut a grade from 43 s to 15 s with identical output. |
+| **Muse Glimmer 30B, 4-bit** (open weights) | Locally on Apple Silicon (MLX) | Offline fallback for grading and for the agent (same tools via a JSON action protocol). Kept resident in memory. Grades with low reasoning; agent steps skip reasoning, since every number is verified against tool output anyway. Chosen over Llama 3.2 11B Vision on the held-out test set ([comparison](#offline-model-choice)). |
 
 Experimental integrations (in the UI, not part of the core demo): **Muse Wonder 1.0** incident briefing, **Muse Image 1.0** recon schematic, and a voice-dispatch button that currently parses a preset command (no microphone capture yet). Each labels its output with the model or fallback that produced it.
 
@@ -58,7 +58,7 @@ flowchart LR
         MEAS --> GRAPH["Vehicle-specific road graph<br/>OSM + measured widths"]
         SPARK --> GRAPH
         GRAPH --> TOOLS["Deterministic tools<br/>route · measure · rank · dispatch"]
-        TOOLS <--> AGENT["Commander agent<br/>Muse Spark → Llama (MLX) → rules"]
+        TOOLS <--> AGENT["Commander agent<br/>Muse Spark → Muse Glimmer (MLX) → rules"]
         AGENT --> VERIFY["Number verifier"]
         GRAPH --> SSE["Dispatch hub (SSE)"]
     end
@@ -110,6 +110,23 @@ Labels were recorded in the built-in `/label` tool, which never shows model answ
 
 Reproduce: `./.venv/bin/python benchmarks/run_benchmarks.py` → [`benchmarks/benchmark_results.json`](benchmarks/benchmark_results.json).
 
+### Offline model choice
+
+Two open-weights models were scored on the same 38 held-out test buildings, using the same prompt and before/after images as Muse Spark, on the M1 Max:
+
+| Model (MLX, 4-bit) | Exact | Within one class | High-severity recall / precision | Median s per building | Agent questions answered with a tool call |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| Llama 3.2 11B Vision | 5 % | 13 % | 1.00 / 0.13 | 14.8 | 1 / 3 |
+| Muse Glimmer 30B, reasoning skipped | 18 % | 26 % | 1.00 / 0.15 | 15.7 | 3 / 3 |
+| **Muse Glimmer 30B, low reasoning** | **53 %** | **76 %** | **1.00 / 0.28** | 38.8 | **3 / 3** |
+| *Muse Spark 1.3 (cloud, for reference)* | *47 %* | *89 %* | *0.40 / 0.22* | — | — |
+
+- **Llama calls almost everything severe.** It also answered "Is 15th Street passable?" without measuring the road.
+- **Muse Glimmer at low reasoning grades.** It is now the offline tier.
+- **Agent steps skip reasoning.** Tool choice is just as good without it, and every number in the answer is verified against tool output either way.
+
+Reproduce: `./.venv/bin/python benchmarks/edge_model_comparison.py` → [`benchmarks/edge_model_comparison.json`](benchmarks/edge_model_comparison.json) (about 50 min).
+
 ## Limitations
 
 - **Sand-covered pavement:** SAM can confidently read it as clear road (3 false-passables on dev).
@@ -121,6 +138,9 @@ Reproduce: `./.venv/bin/python benchmarks/run_benchmarks.py` → [`benchmarks/be
   Treat grades as triage hints.
 - **Meta's content filter** occasionally rejects harmless questions. The agent says so and answers on the laptop instead.
 - **Cloud agent answers take about 7–12 s;** the steps appear live while it works.
+- **Offline is slower:**
+  - each agent step takes about 20 s on the laptop, and a question takes 45–85 s;
+  - an offline road grade takes about 85 s. Warm-up pre-grades the top five choke points on the laptop, so those open instantly.
 
 ---
 
@@ -155,7 +175,7 @@ Environment switches:
 
 | Variable | Effect |
 | :--- | :--- |
-| `FIRSTLIGHT_WARMUP=0` | Skip the startup Llama load and Muse Spark pre-warm. |
+| `FIRSTLIGHT_WARMUP=0` | Skip the startup Muse Glimmer load and the Muse Spark / Muse Glimmer pre-grading of the top choke points. |
 | `FIRSTLIGHT_SPARK_REASONING_EFFORT=` | Use Muse Spark's default reasoning effort (default here: `low`). |
 | `FIRSTLIGHT_UPLINK_PROBE=0` | Disable internet-loss detection. |
 
@@ -174,7 +194,8 @@ The hackathon kicked off Oct 26, 2026 at 12:00 PM ET; the building period runs O
   - blind labelling and the held-out benchmark (`2e1b948`, `a6e53af`);
   - per-building Muse Spark grading from before/after imagery (`302c3f9`, `bdb80f6`);
   - the commander agent with verified answers (`c7402dc`);
-  - offline full-resolution tiles (`e29bd14`), and fixes (see `git log`).
+  - offline full-resolution tiles (`e29bd14`), and fixes (see `git log`);
+  - Muse Glimmer 30B replacing Llama 3.2 Vision as the offline tier after a held-out comparison (Oct 28).
 
 ---
 
@@ -188,8 +209,8 @@ src/
   routing.py        Vehicle-specific graph, routing, clearance ranking
   agent.py          Commander agent: tiers, tool loop, number verifier
   agent_tools.py    Deterministic tools the agent may call
-  failover.py       3-tier grading (Muse Spark → MLX Llama → geometry), resident MLX runtime
-  mlx_patches.py    mlx-vlm cross-attention K/V memo
+  failover.py       3-tier grading (Muse Spark → MLX Muse Glimmer → geometry), resident MLX runtime
+  mlx_patches.py    mlx-vlm cross-attention K/V memo (Llama 3.2 Vision, used in the model comparison)
   dispatch.py       Live dispatch hub (SSE) and internet-loss probe
   labeling.py       Blind labelling API
 ui/                 Commander dashboard, field phone view, labelling page (Leaflet vendored)
@@ -205,7 +226,8 @@ docs/img/           Screenshots
 ## Licenses and attribution
 
 - **Code:** MIT ([`LICENSE`](LICENSE)).
-- **Built with Llama.** The offline tier uses `mlx-community/Llama-3.2-11B-Vision-Instruct-4bit`, licensed under the Llama 3.2 Community License, Copyright © Meta Platforms, Inc. All Rights Reserved.
+- **Muse Glimmer 30B:** the offline tier uses `mlx-community/Muse-Glimmer-30B-4bit` (Apache 2.0).
+- **Built with Llama.** The offline-model comparison also runs `mlx-community/Llama-3.2-11B-Vision-Instruct-4bit`, licensed under the Llama 3.2 Community License, Copyright © Meta Platforms, Inc. All Rights Reserved.
 - **SAM 3.1:** Meta Platforms, Inc., under the SAM License (weights in `models/sam3.1`, transformers `Sam3Model` format).
 - **Meta Model API** (`muse-spark-1.3`, `muse-wonder-1.0`, `muse-image-1.0`): used under the Meta Global AI Developer Hackathon terms.
 - **Map data © OpenStreetMap contributors,** available under the Open Database License (ODbL).

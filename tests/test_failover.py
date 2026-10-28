@@ -147,10 +147,10 @@ def test_tier1_timeout_automatically_falls_back_to_tier2_mlx(
             }
         )
 
-    # Use either real cached models/Llama-3.2-11B-Vision-Instruct-4bit or tmp_path if running in CI
-    mlx_dir = Path("models/Llama-3.2-11B-Vision-Instruct-4bit")
+    # Use either real cached models/Muse-Glimmer-30B-4bit or tmp_path if running in CI
+    mlx_dir = Path("models/Muse-Glimmer-30B-4bit")
     if not mlx_dir.exists():
-        mlx_dir = tmp_path / "Llama-3.2-11B-Vision-Instruct-4bit"
+        mlx_dir = tmp_path / "Muse-Glimmer-30B-4bit"
         mlx_dir.mkdir(parents=True)
 
     transport = httpx.MockTransport(timeout_handler)
@@ -201,7 +201,7 @@ def test_tier1_and_tier2_failure_falls_back_to_tier3_deterministic(
     with httpx.Client(transport=transport) as client:
         router = VLMFailoverRouter(
             api_key="test-meta-key",
-            local_mlx_model_path="models/Llama-3.2-11B-Vision-Instruct-4bit",
+            local_mlx_model_path="models/Muse-Glimmer-30B-4bit",
             mlx_runner=failing_mlx_runner,
         )
         result = router.assess_damage(
@@ -243,7 +243,7 @@ async def test_async_failover_tier1_to_tier2_and_tier3(
     async with httpx.AsyncClient(transport=transport) as async_client:
         router = VLMFailoverRouter(
             api_key="test-meta-key",
-            local_mlx_model_path="models/Llama-3.2-11B-Vision-Instruct-4bit",
+            local_mlx_model_path="models/Muse-Glimmer-30B-4bit",
             mlx_runner=mock_mlx_runner,
         )
         res = await router.assess_damage_async(
@@ -340,7 +340,7 @@ async def test_meta_model_suite_wonder_voice_and_image_failover() -> None:
 
     router = VLMFailoverRouter(
         api_key="test-meta-key",
-        local_mlx_model_path="models/Llama-3.2-11B-Vision-Instruct-4bit",
+        local_mlx_model_path="models/Muse-Glimmer-30B-4bit",
     )
     suite = MetaModelSuite(router)
 
@@ -448,3 +448,22 @@ async def test_meta_model_suite_wonder_voice_and_image_failover() -> None:
     assert "Apple Silicon MLX" not in honest_res.passability_rationale
 
 
+
+
+def test_local_prompt_uses_low_reasoning_and_keeps_only_the_user_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prompt_utils = pytest.importorskip("mlx_vlm.prompt_utils")
+    from src.failover import format_local_prompt, local_final_answer
+
+    monkeypatch.setattr(
+        prompt_utils,
+        "apply_chat_template",
+        lambda *_, **__: "<|start|>system<|message|>Reasoning strength: high.<|eot|><|start|>assistant",
+    )
+    formatted = format_local_prompt(object(), {}, "grade it", num_images=0)
+    assert "Reasoning strength: low." in formatted
+    assert "Reasoning strength: high." not in formatted
+    raw = 'to=self<|message|>the roof is gone<|eom|><|start|>assistant to=user<|message|>{"answer": "x"}'
+    assert local_final_answer(raw) == '{"answer": "x"}'
+    assert local_final_answer('{"answer": "y"}') == '{"answer": "y"}'

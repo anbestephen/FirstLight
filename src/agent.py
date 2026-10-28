@@ -9,7 +9,7 @@ cannot be traced are reported (and the model gets one chance to fix them).
 
 Three tiers, mirroring the grading failover:
 1. Muse Spark 1.3 via the Meta Model API with native tool calling.
-2. Llama 3.2 Vision 4-bit running locally on MLX, same tools via a JSON action protocol.
+2. Muse Glimmer 30B 4-bit running locally on MLX, same tools via a JSON action protocol.
 3. No model: a keyword intent parser calls the same tools and fills an answer template.
 
 `CommanderAgent.run()` yields events (tier, tool_call, tool_result, answer) so the UI can
@@ -27,6 +27,7 @@ from typing import Any, AsyncIterator, Callable
 import httpx
 
 from src.agent_tools import TOOL_SCHEMAS, VEHICLES, AgentTools, numbers_in
+from src.failover import LOCAL_MAX_TOKENS, LOCAL_MODEL_LABEL, format_local_prompt, local_final_answer
 
 MAX_STEPS = 6
 SYSTEM_PROMPT = (
@@ -197,7 +198,7 @@ class CommanderAgent:
                 return
         raise RuntimeError("Muse Spark did not finish within the step limit")
 
-    # ---- Tier 2: local Llama 3.2 Vision (MLX), JSON action protocol ------------------------
+    # ---- Tier 2: local Muse Glimmer (MLX), JSON action protocol ------------------------
     def _edge_prompt(self, question: str, transcript: list[str]) -> str:
         tools = "\n".join(
             f"- {t['function']['name']}({', '.join(t['function']['parameters'].get('properties', {}))}): "
@@ -214,11 +215,10 @@ class CommanderAgent:
     def _generate_local(self, prompt: str) -> str:
         def fn(model: Any, processor: Any, config: dict[str, Any]) -> str:
             from mlx_vlm import generate
-            from mlx_vlm.prompt_utils import apply_chat_template
 
-            formatted = apply_chat_template(processor, config, prompt, num_images=0)
-            out = generate(model, processor, formatted, max_tokens=220, temp=0.0, verbose=False)
-            return out.text if hasattr(out, "text") else str(out)
+            formatted = format_local_prompt(processor, config, prompt, num_images=0, reasoning=False)
+            out = generate(model, processor, formatted, max_tokens=LOCAL_MAX_TOKENS, temp=0.0, verbose=False)
+            return local_final_answer(out.text if hasattr(out, "text") else str(out))
 
         return self.local_runtime.run(fn)
 
@@ -237,7 +237,7 @@ class CommanderAgent:
                     "type": "answer",
                     "text": answer,
                     "verification": verify_numbers(answer, results),
-                    "model": "Llama-3.2-11B-Vision-Instruct-4bit (MLX)",
+                    "model": LOCAL_MODEL_LABEL,
                 }
                 return
             name, args = str(action.get("tool", "")), dict(action.get("args") or {})

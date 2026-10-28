@@ -200,7 +200,7 @@ class FirstLightState:
             )
         )
         self.router = VLMFailoverRouter(
-            local_mlx_model_path=MODELS_DIR / "Llama-3.2-11B-Vision-Instruct-4bit",
+            local_mlx_model_path=MODELS_DIR / "Muse-Glimmer-30B-4bit",
             mode=FailoverMode.AUTO,
             keep_mlx_resident=os.environ.get("FIRSTLIGHT_KEEP_MLX_RESIDENT", "1") != "0",
             uplink_online_hint=lambda: self.dispatch.uplink_online,
@@ -645,9 +645,9 @@ def _edge_telemetry_and_crop(edge_id: str | int) -> tuple[str, GeometricTelemetr
 
 def _run_demo_warmup() -> None:
     """
-    Background warm-up so the live demo never stalls: load the Tier 2 Llama weights into
-    unified memory once, then pre-run real Muse Spark grading on the top choke points so
-    their first on-stage click is served from the cloud response cache.
+    Background warm-up so the live demo never stalls: load the Tier 2 Muse Glimmer weights into
+    unified memory once, then pre-run real Muse Spark and then Muse Glimmer grading on the top
+    choke points so their first on-stage click, online or unplugged, is served from cache.
     """
     status = state.warmup_status
     try:
@@ -680,6 +680,17 @@ def _run_demo_warmup() -> None:
                 status["cloud_cache_prewarmed"] += 1
     except Exception as exc:
         status["cloud_cache_error"] = type(exc).__name__
+        return
+
+    # Same choke points through the on-device model, so an unplugged-router click on them is
+    # instant too (each real Muse Glimmer generation takes ~80-90 s, so this runs last).
+    if status.get("edge_model") == "resident":
+        status["edge_cache_target"] = len(recs)
+        status["edge_cache_prewarmed"] = 0
+        for rec in recs:
+            _, telemetry, crop = _edge_telemetry_and_crop(f"{rec.edge_u}-{rec.edge_v}-{rec.edge_key}")
+            if state.router.prewarm_edge_assessment(telemetry, image_source=crop):
+                status["edge_cache_prewarmed"] += 1
 
 
 @asynccontextmanager
@@ -964,7 +975,7 @@ def get_health() -> dict[str, Any]:
 
     mem_stats = release_unified_memory()
     mlx_weights_ready = (
-        MODELS_DIR / "Llama-3.2-11B-Vision-Instruct-4bit" / "config.json"
+        MODELS_DIR / "Muse-Glimmer-30B-4bit" / "config.json"
     ).exists()
     sam31_weights_ready = (MODELS_DIR / "sam3.1" / "model.safetensors").exists()
     cloud_key_configured = bool(state.router.api_key)
@@ -992,7 +1003,7 @@ def get_health() -> dict[str, Any]:
             "tier_1_cloud_configured": cloud_key_configured,
             "tier_1_timeout_s": state.router.cloud_timeout_s,
             "tier_2_mlx_ready": mlx_weights_ready,
-            "tier_2_model": "Llama-3.2-11B-Vision-Instruct-4bit",
+            "tier_2_model": "Muse-Glimmer-30B-4bit",
             "tier_2_runtime": (
                 state.router.mlx_runtime.status()
                 if state.router.mlx_runtime is not None
@@ -1499,7 +1510,7 @@ async def post_benchmark_tiers(req: BenchmarkTiersRequest) -> dict[str, Any]:
         {
             "tier_id": ConnectivityTier.TIER_2_MLX.value,
             "tier_label": "Tier 2: Apple Silicon MLX 4-bit",
-            "model_id": "Llama-3.2-11B-4bit (mlx-vlm)",
+            "model_id": "Muse-Glimmer-30B-4bit (mlx-vlm)",
             "tier_status": (
                 "edge_mlx_active"
                 if t2_res.tier_used == ConnectivityTier.TIER_2_MLX
@@ -1670,7 +1681,7 @@ async def post_agent_ask(req: AgentAskRequest) -> StreamingResponse:
 
 @app.post("/api/edge-runtime/unload")
 def post_unload_edge_runtime() -> dict[str, Any]:
-    """Explicitly release the resident Tier 2 Llama weights from unified memory."""
+    """Explicitly release the resident Tier 2 Muse Glimmer weights from unified memory."""
     if state.router.mlx_runtime is None:
         return {"resident": False, "unloaded": False}
     state.router.mlx_runtime.unload()

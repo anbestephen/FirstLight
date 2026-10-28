@@ -7,7 +7,7 @@ the code meets it and may change.
 - **Stack:** FastAPI, Python 3.11+, PyTorch (MPS), MLX (`mlx-vlm`), Rasterio, GeoPandas, OSMnx, NetworkX, Shapely, vendored Leaflet.
 - **Hardware:** Apple Silicon M1 Max, 64 GB unified memory. Use `float16` or 4-bit; never assume `bf16` acceleration.
 - **SAM 3.1 is a measuring instrument:** road clear width in metres from 5 m orthogonal cross-sections over SAM probability maps (`src/sam_measure.py`), not just segmentation.
-- **Meta models:** SAM 3.1 (local), Muse Spark 1.3 via the Meta Model API (building grades from pre/post imagery, commander agent, corridor grading), Llama 3.2 11B Vision 4-bit on MLX (offline fallback). Use versioned API model ids (e.g. `muse-spark-1.3`).
+- **Meta models:** SAM 3.1 (local), Muse Spark 1.3 via the Meta Model API (building grades from pre/post imagery, commander agent, corridor grading), Muse Glimmer 30B 4-bit on MLX (offline fallback; low reasoning for grading, none for agent steps). Use versioned API model ids (e.g. `muse-spark-1.3`).
 
 ## Rules
 - **Offline core:** measurement, routing, dashboards, field sync and the no-model agent tier must run with no network.

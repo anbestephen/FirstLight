@@ -4,9 +4,9 @@
 Key Invariants (AGENTS.md & mlx-failover skill):
 1. Tier Structure:
    - Tier 1 (Cloud Primary): Meta Model API (`https://api.meta.ai/v1/chat/completions`,
-     Muse Spark / Llama 3.2 Vision) using `MODEL_API_KEY` with an explicit 2.5s timeout.
+     Muse Spark) using `MODEL_API_KEY` with an explicit 2.5s timeout.
    - Tier 2 (Edge Fallback): Local quantized Apple Silicon inference via `mlx-vlm` using
-     `models/Llama-3.2-11B-Vision-Instruct-4bit` with explicit unified memory release
+     `models/Muse-Glimmer-30B-4bit` with explicit unified memory release
      between runs to prevent memory swapping.
    - Tier 3 (Deterministic Fallback): Pure geometric damage and obstacle heuristics derived
      from SAM 3.1 pixel-to-meter ratios, clear widths, and debris/water overlap ratios.
@@ -61,7 +61,12 @@ SEVERITY_TO_SCORE: dict[DamageSeverity, int] = {
 
 META_MODEL_API_BASE_URL = "https://api.meta.ai/v1"
 DEFAULT_CLOUD_MODEL = "muse-spark-1.3"
-DEFAULT_LOCAL_MLX_MODEL_PATH = "models/Llama-3.2-11B-Vision-Instruct-4bit"
+DEFAULT_LOCAL_MLX_MODEL_PATH = "models/Muse-Glimmer-30B-4bit"
+LOCAL_MODEL_LABEL = "Muse-Glimmer-30B-4bit (MLX)"
+# Muse Glimmer reasons in a hidden `to=self` block before answering `to=user`; this budget
+# covers both. Held-out test set: "low" reasoning scored 53% exact / 76% within-one at
+# ~39 s per building, versus 18% / 26% with reasoning skipped.
+LOCAL_MAX_TOKENS = 1024
 DEFAULT_CLOUD_TIMEOUT_S = 15.0
 DEFAULT_CLOUD_MAX_TOKENS = 2048
 # `muse-spark-1.3` accepts OpenAI-style `reasoning_effort`; "low" cuts interactive grading
@@ -417,10 +422,33 @@ def parse_vlm_json_response(
     return b_sev, r_sev, cue
 
 
+def format_local_prompt(
+    processor: Any, config: dict[str, Any], prompt: str, num_images: int, *, reasoning: bool = True
+) -> str:
+    """
+    Apply the local model's chat template with Muse Glimmer's reasoning strength set to low,
+    or with reasoning skipped entirely (answer addressed straight to the user) when
+    `reasoning=False`; the agent's tool selection is just as accurate that way and several
+    times faster, and its numbers are verified against tool output regardless.
+    """
+    from mlx_vlm.prompt_utils import apply_chat_template
+
+    formatted = apply_chat_template(processor, config, prompt, num_images=num_images)
+    formatted = formatted.replace("Reasoning strength: high.", "Reasoning strength: low.")
+    if not reasoning and formatted.endswith("<|start|>assistant"):
+        formatted += " to=user<|message|>"
+    return formatted
+
+
+def local_final_answer(text: str) -> str:
+    """Drop Muse Glimmer's reasoning channel and keep only the message addressed to the user."""
+    return text.rsplit("to=user<|message|>", 1)[-1]
+
+
 class ResidentMLXRuntime:
     """
-    Keeps the 4-bit Llama 3.2 Vision weights resident in unified memory between Tier 2
-    calls, so an uplink loss mid-demo costs one generation (seconds) instead of a 6 GB
+    Keeps the 4-bit Muse Glimmer weights resident in unified memory between Tier 2
+    calls, so an uplink loss mid-demo costs one generation (seconds) instead of an 18 GB
     reload per request. MLX is not thread-safe, so loads and generations are serialized.
     `unload()` releases the weights explicitly when memory is needed elsewhere.
     """
@@ -486,7 +514,7 @@ class VLMFailoverRouter:
     """
     3-Tier Connectivity & VLM Failover Circuit Breaker:
       - Tier 1: Cloud Meta Model API (`https://api.meta.ai/v1/chat/completions`) with 2.5s timeout
-      - Tier 2: Local Apple Silicon `mlx-vlm` (`models/Llama-3.2-11B-Vision-Instruct-4bit`)
+      - Tier 2: Local Apple Silicon `mlx-vlm` (`models/Muse-Glimmer-30B-4bit`)
       - Tier 3: Deterministic Geometric Heuristics
     """
 
@@ -534,6 +562,9 @@ class VLMFailoverRouter:
         # Real Tier 1 responses keyed by (model, effort, prompt, image) so repeat views of the
         # same corridor return instantly; hits are reported as `cloud_cache_hit=True`.
         self._cloud_cache: dict[str, tuple[DamageSeverity, DamageSeverity, str]] = {}
+        # Real Tier 2 generations from the resident on-device model, keyed the same way.
+        # Muse Glimmer needs ~80-90 s per corridor, so warm-up pre-grades the top choke points.
+        self._edge_cache: dict[str, tuple[DamageSeverity, DamageSeverity, str]] = {}
         self.last_tier_used: ConnectivityTier = ConnectivityTier.TIER_3_DETERMINISTIC
         self.last_fallback_chain: list[str] = []
 
@@ -583,6 +614,35 @@ class VLMFailoverRouter:
             return True
         try:
             self._cloud_cache[key] = self._call_tier1_cloud_sync(telemetry, image_source=image_source)
+        except Exception:
+            return False
+        return True
+
+    def _edge_cache_key(
+        self,
+        telemetry: GeometricTelemetry,
+        image_source: str | Path | Image.Image | np.ndarray | bytes | None,
+    ) -> str:
+        digest = hashlib.sha256()
+        for part in (
+            str(self.local_mlx_model_path),
+            self._build_vlm_prompt(telemetry),
+            _encode_image_to_base64(image_source) or "",
+        ):
+            digest.update(part.encode("utf-8"))
+            digest.update(b"\x00")
+        return digest.hexdigest()
+
+    def prewarm_edge_assessment(
+        self,
+        telemetry: GeometricTelemetry,
+        image_source: str | Path | Image.Image | np.ndarray | bytes | None = None,
+    ) -> bool:
+        """Run a real Tier 2 generation on the resident model and keep it in the edge cache."""
+        if self.mlx_runtime is None:
+            return False
+        try:
+            self._call_tier2_mlx(telemetry, image_source=image_source)
         except Exception:
             return False
         return True
@@ -714,7 +774,7 @@ class VLMFailoverRouter:
     ) -> tuple[DamageSeverity, DamageSeverity, str, bool]:
         """
         Tier 2 (Edge Fallback): Execute local 4-bit quantized Apple Silicon inference via
-        `mlx-vlm` (`models/Llama-3.2-11B-Vision-Instruct-4bit`), enforcing strict unified
+        `mlx-vlm` (`models/Muse-Glimmer-30B-4bit`), enforcing strict unified
         memory cleanup (`del model, processor`, `gc.collect()`, `mx.clear_cache()`) in a
         `finally` block.
         """
@@ -722,6 +782,12 @@ class VLMFailoverRouter:
             raise FileNotFoundError(
                 f"Local MLX VLM model directory not found: {self.local_mlx_model_path}"
             )
+        cacheable = self._custom_mlx_runner is None and self.mlx_runtime is not None
+        if cacheable:
+            cache_key = self._edge_cache_key(telemetry, image_source)
+            if cache_key in self._edge_cache:
+                b_sev, r_sev, cue = self._edge_cache[cache_key]
+                return b_sev, r_sev, cue, False
 
         prompt = self._build_vlm_prompt(telemetry)
         model = None
@@ -778,9 +844,8 @@ class VLMFailoverRouter:
 
                 def _generate(mlx_model: Any, mlx_processor: Any, config: dict[str, Any]) -> str:
                     from mlx_vlm import generate
-                    from mlx_vlm.prompt_utils import apply_chat_template
 
-                    formatted_prompt = apply_chat_template(
+                    formatted_prompt = format_local_prompt(
                         mlx_processor,
                         config,
                         prompt,
@@ -791,11 +856,11 @@ class VLMFailoverRouter:
                         mlx_processor,
                         formatted_prompt,
                         image=images_arg,
-                        max_tokens=160,
+                        max_tokens=LOCAL_MAX_TOKENS,
                         temp=0.0,
                         verbose=False,
                     )
-                    return gen_res.text if hasattr(gen_res, "text") else str(gen_res)
+                    return local_final_answer(gen_res.text if hasattr(gen_res, "text") else str(gen_res))
 
                 if self.mlx_runtime is not None:
                     # Resident weights stay loaded; only transient caches are released below.
@@ -813,6 +878,8 @@ class VLMFailoverRouter:
                     )
 
             b_sev, r_sev, cue = parse_vlm_json_response(raw_output, telemetry)
+            if cacheable:
+                self._edge_cache[cache_key] = (b_sev, r_sev, cue)
         finally:
             if temp_img_path is not None and temp_img_path.exists():
                 try:
@@ -1098,7 +1165,7 @@ class MetaModelSuite:
       3. `muse-wonder-1.0`: Multi-corridor strategic triage & bulldozer deployment advisor
       4. `muse-voice-transcribe-1.0`: Tactical hands-free radio dispatch transcription & parser
       5. `muse-image-1.0`: Tactical clearance recon schematic generator
-      6. `open-weight-mlx-4bit`: Local Apple Silicon `Llama-3.2-11B-Vision-Instruct-4bit` (`mlx-vlm`)
+      6. `open-weight-mlx-4bit`: Local Apple Silicon `Muse-Glimmer-30B-4bit` (`mlx-vlm`)
     """
 
     MODEL_IDS: tuple[str, ...] = (
@@ -1163,7 +1230,7 @@ class MetaModelSuite:
                 "last_tier": ConnectivityTier.TIER_3_DETERMINISTIC.value,
             },
             "open-weight-mlx-4bit": {
-                "role": "Edge Air-Gapped Vision-Language Fallback (Llama-3.2-11B-4bit)",
+                "role": "Edge Air-Gapped Vision-Language Fallback (Muse-Glimmer-30B-4bit)",
                 "call_count": 0,
                 "last_latency_ms": 0.0,
                 "last_tier": ConnectivityTier.TIER_2_MLX.value,

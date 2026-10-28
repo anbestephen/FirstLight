@@ -1059,7 +1059,7 @@
     const boxEl = document.getElementById("assess-result-box");
     boxEl.innerHTML = "Running 3-Tier VLM Damage Grading &amp; Circuit Breaker...";
     document.getElementById("inspector-latency-row").innerHTML = state.forceOffline
-      ? `<span class="analyzing">On-device Llama 3.2 Vision analyzing aerial crop…</span>`
+      ? `<span class="analyzing">On-device Muse Glimmer analyzing aerial crop…</span>`
       : `<span class="analyzing">Muse Spark 1.3 analyzing aerial crop…</span>`;
     // Never leave the previous corridor's grades on screen while the new one is graded.
     document.getElementById("inspector-severity-row").innerHTML = "Building: &hellip; &bull; Road: &hellip;";
@@ -1414,7 +1414,7 @@
   // ---- Ask FirstLight: commander agent (POST /api/agent/ask, streamed NDJSON) ----
   const AGENT_TIER_LABELS = {
     tier_1_cloud: "Muse Spark 1.3 · Meta Cloud",
-    tier_2_edge: "Llama 3.2 Vision · on this laptop",
+    tier_2_edge: "Muse Glimmer · on this laptop",
     tier_3_deterministic: "No model · rules + measured tools",
   };
 

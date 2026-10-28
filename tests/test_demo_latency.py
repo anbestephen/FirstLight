@@ -6,6 +6,7 @@ Muse Spark `reasoning_effort`, the Tier 1 response cache, and uplink-down fast f
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import json
 from pathlib import Path
 import time
@@ -152,11 +153,14 @@ def test_resident_runtime_loads_weights_once_across_requests(fake_mlx_dir: Path)
     )
 
     first = router.assess_damage(_telemetry(), force_offline=True)
-    second = router.assess_damage(_telemetry(), force_offline=True)
+    repeat = router.assess_damage(_telemetry(), force_offline=True)
+    other = router.assess_damage(replace(_telemetry(), target_id="edge-8", road_name="16th Street"), force_offline=True)
 
-    assert first.tier_used == second.tier_used == ConnectivityTier.TIER_2_MLX
+    assert first.tier_used == repeat.tier_used == other.tier_used == ConnectivityTier.TIER_2_MLX
     assert first.building_damage_severity == "destroyed"
-    assert second.building_damage_severity == "minor_damage"
+    # Same corridor and image: served from the edge cache, no second generation.
+    assert repeat.building_damage_severity == "destroyed"
+    assert other.building_damage_severity == "minor_damage"
     assert len(loads) == 1
     assert runtime.status() == {"resident": True, "load_seconds": runtime.load_seconds, "load_count": 1}
 
