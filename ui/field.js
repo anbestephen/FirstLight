@@ -123,11 +123,11 @@
       const latLngs = coords.map(function (c) {
         return [c[1], c[0]];
       });
-      let style = { color: "#10b981", weight: 3, opacity: 0.55 };
+      let style = { color: "#34d399", weight: 3, opacity: 0.55 };
       if (water.has(id)) {
-        style = { color: "#a855f7", weight: 4, opacity: 0.9, dashArray: "6, 6" };
+        style = { color: "#a78bfa", weight: 4, opacity: 0.9, dashArray: "6, 6" };
       } else if (blocked.has(id)) {
-        style = { color: "#f59e0b", weight: 4, opacity: 0.9 };
+        style = { color: "#f87171", weight: 4, opacity: 0.9 };
       }
       L.polyline(latLngs, style).addTo(state.roadsLayer);
     });
@@ -144,8 +144,8 @@
       const latLngs = coords.map(function (c) {
         return [c[1], c[0]];
       });
-      L.polyline(latLngs, { color: "#0b1120", weight: 11, opacity: 0.85 }).addTo(state.routeLayer);
-      routeLine = L.polyline(latLngs, { color: "#38bdf8", weight: 7, opacity: 1 }).addTo(
+      L.polyline(latLngs, { color: "#0a0e15", weight: 11, opacity: 0.85 }).addTo(state.routeLayer);
+      routeLine = L.polyline(latLngs, { color: "#5b8cff", weight: 7, opacity: 1 }).addTo(
         state.routeLayer
       );
     }
@@ -153,26 +153,26 @@
     if (snapshot.origin) {
       L.circleMarker([snapshot.origin[1], snapshot.origin[0]], {
         radius: 9,
-        color: "#ffffff",
+        color: "#0a0e15",
         weight: 3,
-        fillColor: "#10b981",
+        fillColor: "#5b8cff",
         fillOpacity: 1,
       }).addTo(state.markersLayer);
     }
     if (snapshot.destination) {
       L.circleMarker([snapshot.destination[1], snapshot.destination[0]], {
         radius: 9,
-        color: "#ffffff",
+        color: "#0a0e15",
         weight: 3,
-        fillColor: "#ef4444",
+        fillColor: "#e7ecf4",
         fillOpacity: 1,
       }).addTo(state.markersLayer);
     }
 
     if (fitToRoute) {
       const padding = {
-        paddingTopLeft: [24, 90],
-        paddingBottomRight: [24, 280],
+        paddingTopLeft: [24, 80],
+        paddingBottomRight: [24, 340],
         animate: Boolean(animateFit),
       };
       if (routeLine) {
@@ -232,7 +232,7 @@
     const conn = snapshot.connectivity || {};
     const aiPill = document.getElementById("ai-pill");
     const onEdge = conn.ai_tier === "tier_2_edge";
-    aiPill.textContent = onEdge ? "AI: On-device Muse Glimmer" : "AI: Meta Cloud";
+    aiPill.textContent = onEdge ? "AI · On-device" : "AI · Cloud";
     aiPill.classList.toggle("ai-edge", onEdge);
     aiPill.classList.toggle("ai-cloud", !onEdge);
     const banner = document.getElementById("uplink-banner");

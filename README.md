@@ -205,7 +205,8 @@ The hackathon kicked off Oct 26, 2026 at 12:00 PM ET; the building period runs O
   - offline full-resolution tiles (`e29bd14`), and fixes (see `git log`);
   - Muse Glimmer 30B replacing Llama 3.2 Vision as the offline tier after a held-out comparison (Oct 28);
   - push-to-talk questions through Muse Voice Transcribe, replacing a preset-command placeholder (Oct 29);
-  - least-debris clearance paths to blocks no vehicle can reach (Oct 29).
+  - least-debris clearance paths to blocks no vehicle can reach (Oct 29);
+  - redesigned commander dashboard and field view: KPI cards, side panels, a Meta models panel and a road inspector (Oct 29).
 
 ---
 

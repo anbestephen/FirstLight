@@ -36,6 +36,18 @@
     markersLayer: null,
   };
 
+  // Map colours match the legend and the CSS tokens.
+  const C = {
+    open: "#34d399",
+    narrow: "#f5a524",
+    blocked: "#f87171",
+    water: "#a78bfa",
+    route: "#5b8cff",
+    ink: "#0a0e15",
+  };
+  const VEHICLE_MIN_M = { atv: 1.2, ambulance: 2.2, fire_engine: 3.5 };
+  const VEHICLE_SHORT = { atv: "ATV", ambulance: "Ambulance", fire_engine: "Fire engine" };
+
   const VEHICLE_LABELS = {
     atv: "ATV / Foot (>=1.2m)",
     ambulance: "Ambulance / Pickup (>=2.2m)",
@@ -45,12 +57,20 @@
   function formatTierLabel(tierCode) {
     const t = String(tierCode || "").toLowerCase();
     if (t.includes("tier_1")) {
-      return "Tier 1: Meta Cloud API";
+      return "Muse Spark · Meta Cloud";
     }
     if (t.includes("tier_2")) {
-      return "Tier 2: Apple Silicon MLX 4-bit";
+      return "Muse Glimmer · this laptop";
     }
-    return "Tier 3: Deterministic";
+    return "Rules only · no model";
+  }
+
+  // Top-bar AI pill: which Meta model answers right now (and warm-up progress).
+  function setAiPill(tierCode) {
+    const pill = document.getElementById("vlm-tier-badge");
+    const t = String(tierCode || "").toLowerCase();
+    pill.textContent = t.includes("tier_1") ? "AI · Meta Cloud" : t.includes("tier_2") ? "AI · On-device" : "AI · Rules only";
+    pill.classList.toggle("edge", !t.includes("tier_1"));
   }
 
   function initMap() {
@@ -65,9 +85,10 @@
       zoomSnap: 0.25,
       zoomDelta: 0.5,
       maxBoundsViscosity: 1.0,
-      zoomControl: true,
+      zoomControl: false,
       attributionControl: false,
     });
+    L.control.zoom({ position: "bottomright" }).addTo(map);
 
     state.map = map;
     state.buildingsLayer = L.layerGroup().addTo(map);
@@ -120,6 +141,7 @@
     const btnDest = document.getElementById("btn-pick-dest");
     btnOrigin.classList.toggle("active-pick", mode === "origin");
     btnDest.classList.toggle("active-pick", mode === "destination");
+    state.map.getContainer().classList.toggle("picking", Boolean(mode));
   }
 
   function isEdgeCleared(u, v, key) {
@@ -140,24 +162,56 @@
       if (!res.ok) throw new Error("Health check failed");
       const data = await res.json();
 
-      const netPill = document.getElementById("network-status-text");
-      netPill.textContent = state.forceOffline
-        ? "COMMS BLACKOUT (EDGE ONLY)"
-        : data.offline_ready
-        ? "LOCAL WI-FI / OFFLINE READY"
-        : "ONLINE";
-
-      const tierBadge = document.getElementById("vlm-tier-badge");
-      const activeTier = (data.vlm_tiers && data.vlm_tiers.active_tier) || "";
-      tierBadge.textContent = formatTierLabel(activeTier).toUpperCase();
+      setNetworkStatus();
+      const tiers = data.vlm_tiers || {};
+      setAiPill(state.forceOffline ? "tier_2" : tiers.active_tier);
 
       const gsd = data.geospatial ? data.geospatial.gsd_m_per_px : 0.2804;
-      const hwBadge = document.getElementById("hw-status-badge");
-      hwBadge.textContent = `MPS/MLX fp16 • ${gsd} m/px`;
+      document.getElementById("hw-status-badge").textContent =
+        `SAM 3.1 fp16 on MPS · Muse Glimmer 4-bit on MLX · ${gsd} m/px`;
+      return renderWarmup(tiers.warmup || {});
     } catch (err) {
-      const netPill = document.getElementById("network-status-text");
-      netPill.textContent = "LOCAL CACHE ACTIVE";
+      document.getElementById("network-status-text").textContent = "Server unreachable";
+      return false;
     }
+  }
+
+  function setNetworkStatus() {
+    const dot = document.getElementById("network-status-dot");
+    const text = document.getElementById("network-status-text");
+    dot.classList.toggle("online", !state.forceOffline);
+    dot.classList.toggle("offline", state.forceOffline);
+    text.textContent = state.forceOffline ? "Blackout · on-device" : "Online";
+  }
+
+  // Warm-up loads Muse Glimmer and pre-grades the top choke points; returns true when finished.
+  function renderWarmup(w) {
+    const el = document.getElementById("warmup-status");
+    const pill = document.getElementById("vlm-tier-badge");
+    let text = "";
+    let done = true;
+    if (w.edge_model === "loading") {
+      text = "Loading Muse Glimmer…";
+      done = false;
+    } else if (w.edge_cache_target !== undefined && w.edge_cache_prewarmed < w.edge_cache_target) {
+      text = `Pre-grading roads on-device ${w.edge_cache_prewarmed}/${w.edge_cache_target}`;
+      done = false;
+    } else if (w.edge_model === "resident" && w.edge_cache_target === undefined && !w.cloud_cache_error) {
+      text = `Pre-grading roads in the cloud ${w.cloud_cache_prewarmed || 0}/${w.cloud_cache_target || 0}`;
+      done = false;
+    } else if (w.edge_model === "resident") {
+      text = "Ready";
+    }
+    el.textContent = text;
+    pill.classList.toggle("warming", !done);
+    pill.title = done ? "Which Meta model is answering; click for all models" : `Warming up: ${text}`;
+    return done;
+  }
+
+  function pollWarmup() {
+    fetchHealth().then(function (done) {
+      if (!done) setTimeout(pollWarmup, 5000);
+    });
   }
 
   async function loadInitialLayers() {
@@ -206,6 +260,18 @@
     applyAoiViewportBounds(false);
     renderBuildingsLayer();
     renderRoadsLayer();
+    if (!state.fittedToRoads && state.roadsGeojson) {
+      state.fittedToRoads = true;
+      fitRoads();
+    }
+  }
+
+  // Frame the measured road network between the KPI cards (top) and the command bar (bottom).
+  function fitRoads() {
+    const bounds = L.geoJSON(state.roadsGeojson).getBounds();
+    if (bounds.isValid()) {
+      state.map.fitBounds(bounds, { paddingTopLeft: [150, 120], paddingBottomRight: [70, 130] });
+    }
   }
 
   function renderBuildingsLayer() {
@@ -216,10 +282,10 @@
     }
 
     const sevColors = {
-      destroyed: "#ef4444",
-      major_damage: "#f97316",
-      minor_damage: "#eab308",
-      no_damage: "#22c55e",
+      destroyed: "#f87171",
+      major_damage: "#fb923c",
+      minor_damage: "#facc15",
+      no_damage: "#64748b",
     };
 
     const unlockedSet = new Set((state.highlightedUnlockedNodes || []).map(String));
@@ -231,8 +297,8 @@
         const isUnlocked = unlockedSet.has(String(p.nearest_node || ""));
         if (isUnlocked && p.is_high_severity) {
           return {
-            color: "#06b6d4",
-            fillColor: "#10b981",
+            color: C.open,
+            fillColor: C.open,
             weight: 2.5,
             fillOpacity: 0.85,
           };
@@ -249,9 +315,8 @@
         const isUnlocked = unlockedSet.has(String(p.nearest_node || ""));
         layer.bindPopup(
           `<strong>Building ${p.building_id || ""}</strong><br/>` +
-          `Damage Severity: <code>${p.damage_severity}</code><br/>` +
-          `High Severity Target: <strong>${p.is_high_severity ? "YES" : "NO"}</strong>` +
-          (isUnlocked ? `<br/><strong style="color:#10b981;">UNLOCKED BY CHOKE-POINT CLEARANCE</strong>` : "")
+          `Muse Spark grade: <code>${String(p.damage_severity || "").replace("_", " ")}</code>` +
+          (isUnlocked ? `<br/><strong style="color:${C.open};">Reachable once the selected pile is cleared</strong>` : "")
         );
       },
     }).addTo(state.buildingsLayer);
@@ -268,12 +333,16 @@
       style: function (feature) {
         const p = feature.properties || {};
         if (p.has_water_obstruction || Number(p.water_overlap_ratio) > 0) {
-          return { color: "#a855f7", weight: 4, opacity: 0.9, dashArray: "6, 6" };
+          return { color: C.water, weight: 4, opacity: 0.95, dashArray: "6, 6" };
         }
         if (p[passKey]) {
-          return { color: "#10b981", weight: 3, opacity: 0.75 };
+          return { color: C.open, weight: 3, opacity: 0.8 };
         }
-        return { color: "#f59e0b", weight: 4, opacity: 0.9 };
+        // Some clear width, just not enough for this vehicle, vs no usable width at all.
+        if (Number(p.min_clear_width_m) >= VEHICLE_MIN_M.atv) {
+          return { color: C.narrow, weight: 4, opacity: 0.95 };
+        }
+        return { color: C.blocked, weight: 4, opacity: 0.95 };
       },
       onEachFeature: function (feature, layer) {
         layer.on("click", function () {
@@ -285,8 +354,8 @@
         const p = feature.properties || {};
         layer.bindTooltip(
           `<strong>${p.name}</strong><br/>` +
-          `Min Clear Width: ${p.min_clear_width_m}m (GSD: ${p.gsd_m_per_px} m/px)<br/>` +
-          `Debris: ${p.debris_area_sqm} m² | Water Ratio: ${p.water_overlap_ratio}`,
+          `Clear width ${Number(p.min_clear_width_m).toFixed(1)} m · debris ${Math.round(Number(p.debris_area_sqm) || 0)} m²` +
+          (Number(p.water_overlap_ratio) > 0 ? " · standing water" : ""),
           { sticky: true }
         );
       },
@@ -307,7 +376,7 @@
     } else {
       cropImg.src = `/api/choke-point/${encodedId}/crop.png`;
       if (captionEl) {
-        captionEl.textContent = "256×256 NOAA GeoTIFF Crop";
+        captionEl.textContent = "NOAA post-storm aerial, Oct 11 2018";
       }
     }
   }
@@ -319,9 +388,21 @@
 
     const labelEl = document.getElementById("gauge-measured-span-label");
     if (labelEl) {
-      labelEl.textContent = hasWater
-        ? `Measured: 0.00m (WATER=INF)`
-        : `Measured: ${w.toFixed(2)}m`;
+      labelEl.textContent = `${w.toFixed(1)} m`;
+    }
+    const chip = document.getElementById("inspector-status-chip");
+    if (chip) {
+      const passCount = ["atv", "ambulance", "fire_engine"].filter(function (vc) {
+        return !hasWater && w >= VEHICLE_MIN_M[vc];
+      }).length;
+      chip.className = `chip ${passCount === 3 ? "ok" : passCount === 0 ? "bad" : "warn"}`;
+      chip.textContent = hasWater
+        ? "Standing water"
+        : passCount === 3
+        ? "Open to all vehicles"
+        : passCount === 0
+        ? "Blocked for all vehicles"
+        : "Too narrow for some vehicles";
     }
 
     const fillEl = document.getElementById("caliper-gauge-fill");
@@ -336,14 +417,14 @@
     }
 
     const checks = [
-      { id: "gauge-badge-atv", label: "ATV (\u22651.2m)", pass: !hasWater && w >= 1.2 },
-      { id: "gauge-badge-ambulance", label: "Ambulance (\u22652.2m)", pass: !hasWater && w >= 2.2 },
-      { id: "gauge-badge-fire_engine", label: "Fire Engine (\u22653.5m)", pass: !hasWater && w >= 3.5 },
+      { id: "gauge-badge-atv", label: "ATV", pass: !hasWater && w >= 1.2 },
+      { id: "gauge-badge-ambulance", label: "Ambulance", pass: !hasWater && w >= 2.2 },
+      { id: "gauge-badge-fire_engine", label: "Fire engine", pass: !hasWater && w >= 3.5 },
     ];
     checks.forEach(function (item) {
       const el = document.getElementById(item.id);
       if (!el) return;
-      el.textContent = `${item.label}: ${item.pass ? "PASS" : "BLOCKED"}`;
+      el.textContent = `${item.label} ${item.pass ? "passes" : "blocked"}`;
       el.classList.toggle("pass", item.pass);
       el.classList.toggle("blocked", !item.pass);
     });
@@ -354,22 +435,11 @@
       const rId = r.edge_id || `${r.edge_u}-${r.edge_v}-${r.edge_key}`;
       return String(rId) === String(edgeId);
     });
-    const bannerEl = document.getElementById("unlocked-impact-banner");
-    const textEl = document.getElementById("unlocked-impact-text");
-
+    // Highlight only; the toast is reserved for an actual simulated clearance.
     if (rec && rec.high_severity_structures_unlocked > 0) {
       state.highlightedUnlockedNodes = rec.unlocked_node_ids || [rec.edge_u, rec.edge_v];
-      if (bannerEl && textEl) {
-        textEl.textContent =
-          `+${rec.high_severity_structures_unlocked} High-Severity Structures Unlocked | ` +
-          `Clearance ROI: ${Number(rec.clearance_roi).toFixed(2)} structures/m² (${rec.road_name})`;
-        bannerEl.classList.remove("hidden");
-      }
     } else {
       state.highlightedUnlockedNodes = [];
-      if (bannerEl) {
-        bannerEl.classList.add("hidden");
-      }
     }
     renderBuildingsLayer();
   }
@@ -378,9 +448,27 @@
    * Fetch 5m orthogonal caliper rays & SAM 3.1 masks for `edgeId`, render on map,
    * load `/api/choke-point/{edgeId}/crop.png` or `/recon-schematic.png`, and run live 3-tier VLM assessment.
    */
+  function openInspector() {
+    document.getElementById("corridor-inspector-dock").classList.remove("hidden");
+    relayoutMap();
+  }
+
+  function closeInspector() {
+    document.getElementById("corridor-inspector-dock").classList.add("hidden");
+    relayoutMap();
+  }
+
+  // The map shares the row with the drawer and inspector; let Leaflet re-measure after they move.
+  function relayoutMap() {
+    requestAnimationFrame(function () {
+      if (state.map) state.map.invalidateSize();
+    });
+  }
+
   async function inspectCorridorByEdgeId(edgeId, zoomToCorridor) {
     if (!edgeId) return;
     state.activeEdgeId = String(edgeId);
+    if (zoomToCorridor) openInspector();
 
     // Highlight selected card in ROI list if present
     document.querySelectorAll(".roi-card").forEach(function (card) {
@@ -419,9 +507,7 @@
     }
     if (badgeEl && needsDroneRecon !== undefined && needsDroneRecon !== null) {
       const flagged = Boolean(needsDroneRecon);
-      badgeEl.textContent = flagged
-        ? "[ DRONE RECON FLAGGED: Low Confidence / Canopy Occlusion ]"
-        : "[ HIGH CONFIDENCE GEOMETRY ]";
+      badgeEl.textContent = flagged ? "Drone check advised" : "High confidence";
       badgeEl.classList.toggle("flagged", flagged);
       badgeEl.classList.toggle("high-conf", !flagged);
     }
@@ -684,10 +770,9 @@
     }
     const caliperReadingEl = document.getElementById("inspector-caliper-reading");
     if (caliperReadingEl && props.min_clear_width_m !== undefined) {
-      caliperReadingEl.innerHTML =
-        `Pinch Span: <strong>${Number(props.min_clear_width_m).toFixed(2)}m</strong> ` +
-        `at station ${Number(props.pinch_point_station_m || 0).toFixed(1)}m ` +
-        `(${props.ray_count || 0} rays @ ${props.gsd_m_per_px} m/px)`;
+      caliperReadingEl.textContent =
+        `narrowest at ${Number(props.pinch_point_station_m || 0).toFixed(0)} m · ` +
+        `${props.ray_count || 0} cuts every 5 m`;
     }
 
     const bounds = L.geoJSON(caliperGeojson).getBounds();
@@ -768,7 +853,7 @@
       }
       const count = (snapshot.connectivity && snapshot.connectivity.field_clients) || 0;
       pill.classList.toggle("live", count > 0);
-      textEl.textContent = `FIELD LINK: ${count} DEVICE${count === 1 ? "" : "S"}`;
+      textEl.textContent = `${count} field device${count === 1 ? "" : "s"}`;
       pill.title = snapshot.field_url
         ? `Open ${snapshot.field_url} on a phone on this Wi-Fi`
         : "Field view: /field on this laptop's LAN address";
@@ -785,24 +870,24 @@
     if (state.origin) {
       L.circleMarker([state.origin.lat, state.origin.lon], {
         radius: 7,
-        color: "#ffffff",
-        fillColor: "#10b981",
+        color: C.ink,
+        fillColor: C.route,
         fillOpacity: 1,
         weight: 2,
       })
-        .bindTooltip("Staging Origin", { permanent: false })
+        .bindTooltip("Command post", { permanent: false })
         .addTo(state.markersLayer);
     }
 
     if (state.destination) {
       L.circleMarker([state.destination.lat, state.destination.lon], {
         radius: 7,
-        color: "#ffffff",
-        fillColor: "#ef4444",
+        color: C.ink,
+        fillColor: "#e7ecf4",
         fillOpacity: 1,
         weight: 2,
       })
-        .bindTooltip("Target Destination", { permanent: false })
+        .bindTooltip("Destination", { permanent: false })
         .addTo(state.markersLayer);
     }
 
@@ -810,29 +895,24 @@
       const latLngs = routeData.geojson_geometry.coordinates.map(function (c) {
         return [c[1], c[0]];
       });
-      L.polyline(latLngs, {
-        color: "#38bdf8",
-        weight: 6,
-        opacity: 0.95,
-      }).addTo(state.routeLayer);
+      L.polyline(latLngs, { color: C.ink, weight: 10, opacity: 0.55 }).addTo(state.routeLayer);
+      L.polyline(latLngs, { color: C.route, weight: 6, opacity: 1 }).addTo(state.routeLayer);
     }
   }
 
   function renderRouteBanner(routeData) {
-    document.getElementById("route-class-label").textContent =
-      VEHICLE_LABELS[state.vehicleClass] || state.vehicleClass;
+    document.getElementById("route-class-label").textContent = VEHICLE_SHORT[state.vehicleClass] || state.vehicleClass;
 
     const statusEl = document.getElementById("route-status-val");
-    if (routeData.reachable) {
-      statusEl.textContent = "PASSABLE";
-      statusEl.style.color = "#10b981";
-    } else {
-      statusEl.textContent = "BLOCKED";
-      statusEl.style.color = "#ef4444";
-    }
+    statusEl.textContent = routeData.reachable ? "Open" : "Blocked";
+    statusEl.className = `num ${routeData.reachable ? "ok" : "bad"}`;
 
-    document.getElementById("route-distance-val").textContent = `${routeData.total_distance_m.toFixed(1)} m`;
-    document.getElementById("route-eta-val").textContent = `${routeData.estimated_transit_time_s.toFixed(1)} s`;
+    document.getElementById("route-distance-val").textContent = routeData.reachable
+      ? `${(routeData.total_distance_m / 1000).toFixed(2)} km`
+      : "no route";
+    document.getElementById("route-eta-val").textContent = routeData.reachable
+      ? `${(routeData.estimated_transit_time_s / 60).toFixed(1)} min`
+      : "–";
     document.getElementById("route-detours-val").textContent = String(
       (routeData.blocked_edges_avoided || []).length
     );
@@ -844,18 +924,22 @@
     ["atv", "ambulance", "fire_engine"].forEach(function (vc) {
       if (allSummary[vc]) {
         const info = allSummary[vc];
-        const tag = info.reachable ? `${info.total_distance_m}m (${info.estimated_transit_time_s}s)` : "BLOCKED";
-        parts.push(`<span><strong>${vc.toUpperCase()}:</strong> ${tag}</span>`);
+        const tag = info.reachable
+          ? `<span class="rc-val ok-text">${(info.total_distance_m / 1000).toFixed(2)} km · ${(info.estimated_transit_time_s / 60).toFixed(1)} min</span>`
+          : `<span class="rc-val bad-text">no route</span>`;
+        parts.push(
+          `<div class="rc-row ${vc === state.vehicleClass ? "active" : ""}"><span>${VEHICLE_SHORT[vc]} <span class="muted">&gt;${VEHICLE_MIN_M[vc]} m</span></span>${tag}</div>`
+        );
       }
     });
-    summaryEl.innerHTML = parts.join(" &bull; ");
+    summaryEl.innerHTML = parts.join("");
   }
 
   function renderTurnByTurnSteps(steps) {
     document.getElementById("steps-count").textContent = String(steps.length);
     const listEl = document.getElementById("route-steps-list");
     if (!steps.length) {
-      listEl.innerHTML = `<div class="roi-explanation">No passable route segments for selected vehicle class.</div>`;
+      listEl.innerHTML = `<div class="roi-explanation">No passable route for ${VEHICLE_SHORT[state.vehicleClass]}. Ask FirstLight which piles to clear.</div>`;
       return;
     }
 
@@ -863,12 +947,8 @@
       .map(function (st, idx) {
         return `
           <div class="step-item">
-            <div><strong>${idx + 1}. ${st.name}</strong> (${st.length_m}m)</div>
-            <div class="step-meta">
-              Min Clear Span: <strong>${st.min_clear_width_m}m</strong> &bull;
-              Debris: ${st.debris_area_sqm} m² &bull;
-              ETA: ${st.travel_time_s}s
-            </div>
+            <div><strong>${idx + 1}. ${st.name}</strong></div>
+            <div class="step-meta">${Math.round(st.length_m)} m · narrowest ${Number(st.min_clear_width_m).toFixed(1)} m · ${Math.round(st.travel_time_s)} s</div>
           </div>
         `;
       })
@@ -880,6 +960,7 @@
     const data = await res.json();
     state.lastRoiRecommendations = data.recommendations || [];
     renderRoiQueue(state.lastRoiRecommendations);
+    refreshSituation();
 
     // Automatically inspect Rank #1 choke point on initial load so caliper rays & crop are visible immediately
     if (!state.activeEdgeId && state.lastRoiRecommendations.length > 0) {
@@ -904,14 +985,14 @@
         return `
           <div class="roi-card ${cleared ? "cleared" : ""} ${isSelected ? "selected-corridor" : ""}" data-edge-id="${edgeId}">
             <div class="roi-card-header">
-              <span class="roi-rank-badge">RANK #${rec.rank}</span>
-              <span class="roi-score">ROI: ${rec.clearance_roi.toFixed(3)} bldg/m²</span>
+              <span class="roi-rank-badge">#${rec.rank}</span>
+              <span class="roi-score">+${rec.high_severity_structures_unlocked} buildings</span>
             </div>
             <div class="roi-road-title">${rec.road_name}</div>
             <div class="roi-metrics-row">
-              <span>Span: ${rec.current_clear_width_m}m &rarr; ${rec.restored_clear_width_m}m</span>
-              <span>Debris: ${rec.debris_area_sqm} m²</span>
-              <span>Unlocks: ${rec.high_severity_structures_unlocked} High-Sev Bldg</span>
+              <span>${rec.current_clear_width_m} → ${rec.restored_clear_width_m} m</span>
+              <span>${rec.debris_area_sqm} m² debris</span>
+              <span>${(100 * rec.clearance_roi).toFixed(0)} bldgs / 100 m²</span>
             </div>
             <div class="roi-explanation">${rec.explanation}</div>
             <div class="roi-card-actions">
@@ -922,14 +1003,14 @@
                 data-v="${rec.edge_v}"
                 data-key="${rec.edge_key}"
               >
-                ${cleared ? "✓ Clearance Simulated (Undo)" : "Simulate Clearance"}
+                ${cleared ? "✓ Cleared (undo)" : "Simulate clearance"}
               </button>
               <button
                 type="button"
                 class="action-btn btn-inspect-roi"
                 data-edge-id="${edgeId}"
               >
-                5m Caliper &amp; VLM
+                Measure
               </button>
             </div>
           </div>
@@ -991,6 +1072,7 @@
     renderRoadsLayer();
     renderRoiQueue(state.lastRoiRecommendations);
     await refreshRoute();
+    refreshSituation();
 
     if (priorRec && priorRec.high_severity_structures_unlocked > 0) {
       state.highlightedUnlockedNodes = priorRec.unlocked_node_ids || [u, v];
@@ -998,9 +1080,12 @@
       const textEl = document.getElementById("unlocked-impact-text");
       if (bannerEl && textEl) {
         textEl.textContent =
-          `+${priorRec.high_severity_structures_unlocked} High-Severity Structures Unlocked | ` +
-          `Clearance ROI: ${Number(priorRec.clearance_roi).toFixed(2)} structures/m² (${priorRec.road_name})`;
+          `Cleared ${priorRec.road_name}: +${priorRec.high_severity_structures_unlocked} severely damaged buildings now reachable`;
         bannerEl.classList.remove("hidden");
+        clearTimeout(state.toastTimer);
+        state.toastTimer = setTimeout(function () {
+          bannerEl.classList.add("hidden");
+        }, 7000);
       }
       renderBuildingsLayer();
       await refreshActiveCaliper();
@@ -1045,19 +1130,22 @@
     renderRoadsLayer();
     renderRoiQueue(state.lastRoiRecommendations);
     await refreshRoute();
+    refreshSituation();
     if (state.activeEdgeId) {
       await inspectCorridorByEdgeId(state.activeEdgeId, false);
     }
   }
 
   function updateClearedCounter() {
-    document.getElementById("cleared-count").textContent = String(state.clearedEdges.length);
+    const badge = document.getElementById("cleared-count");
+    badge.textContent = String(state.clearedEdges.length);
+    badge.setAttribute("data-zero", String(state.clearedEdges.length === 0));
   }
 
   async function runVlmAssessmentForEdge(edgeId) {
     const modeSelect = document.getElementById("select-failover-mode");
     const boxEl = document.getElementById("assess-result-box");
-    boxEl.innerHTML = "Running 3-Tier VLM Damage Grading &amp; Circuit Breaker...";
+    boxEl.innerHTML = `<span class="analyzing">Grading the selected road…</span>`;
     document.getElementById("inspector-latency-row").innerHTML = state.forceOffline
       ? `<span class="analyzing">On-device Muse Glimmer analyzing aerial crop…</span>`
       : `<span class="analyzing">Muse Spark 1.3 analyzing aerial crop…</span>`;
@@ -1079,8 +1167,6 @@
     const data = await res.json();
 
     const formattedTier = formatTierLabel(data.tier_used);
-    const tierBadge = document.getElementById("vlm-tier-badge");
-    tierBadge.textContent = formattedTier.toUpperCase();
 
     // Update Corridor AI Inspector dock
     document.getElementById("inspector-tier-pill").textContent = formattedTier;
@@ -1090,13 +1176,13 @@
       document.getElementById("inspector-road-name").textContent = data.target_id || String(edgeId);
     }
     document.getElementById("inspector-latency-row").innerHTML =
-      `Latency: <strong>${data.latency_ms} ms</strong> &bull; ` +
+      `${(data.latency_ms / 1000).toFixed(1)} s` +
       (data.cloud_cache_hit
-        ? `<span class="cache-hit" title="Real Muse Spark response computed earlier for this exact crop and measurement">cached Muse Spark response</span>`
-        : `Memory Cleared: <strong>${data.memory_cleared}</strong>`);
+        ? ` · <span class="cache-hit" title="Real Muse Spark response computed earlier for this exact crop and measurement">cached Muse Spark response</span>`
+        : "");
     document.getElementById("inspector-severity-row").innerHTML =
-      `Building: <code>${data.building_damage_severity}</code> &bull; ` +
-      `Road: <code>${data.road_damage_severity}</code>`;
+      `Buildings <strong>${String(data.building_damage_severity).replace("_", " ")}</strong> · ` +
+      `road <strong>${String(data.road_damage_severity).replace("_", " ")}</strong>`;
     if (data.sam_confidence !== undefined) {
       updateSamConfidenceAndReconBadge(data.sam_confidence, data.needs_drone_recon);
     }
@@ -1104,13 +1190,10 @@
       data.passability_rationale || "";
 
     boxEl.innerHTML = `
-      <div><strong>Edge ID:</strong> <code>${data.edge_id || data.target_id}</code></div>
-      <div><strong>Comms Blackout Mode:</strong> <code>force_offline=${data.force_offline}</code></div>
-      <div><strong>Active Tier Used:</strong> <code>${formattedTier}</code> (${data.latency_ms} ms)</div>
-      <div><strong>Fallback Chain:</strong> <code>${(data.fallback_chain || []).join(" &rarr; ")}</code></div>
-      <div><strong>Building Severity:</strong> <code>${data.building_damage_severity}</code> (High-Sev: ${data.is_high_severity ? "YES" : "NO"})</div>
-      <div><strong>Road Severity:</strong> <code>${data.road_damage_severity}</code></div>
-      <div><strong>Unified Memory Hygiene:</strong> <code>memory_cleared=${data.memory_cleared}</code></div>
+      <div><strong>${formattedTier}</strong> · ${(data.latency_ms / 1000).toFixed(1)} s</div>
+      <div>Buildings <code>${data.building_damage_severity}</code> · road <code>${data.road_damage_severity}</code></div>
+      <div class="muted">Fallback chain: <code>${(data.fallback_chain || []).join(" → ")}</code></div>
+      <div class="muted">Blackout simulated: <code>${data.force_offline}</code> · memory released: <code>${data.memory_cleared}</code></div>
       <div class="roi-explanation">${data.passability_rationale}</div>
     `;
   }
@@ -1218,7 +1301,7 @@
         state.schematicLabel = data.schematic_label;
         const btnSchematic = document.getElementById("btn-view-schematic");
         if (btnSchematic) {
-          btnSchematic.textContent = data.schematic_label;
+          btnSchematic.title = data.schematic_label;
         }
       }
       (data.models || []).forEach(function (m) {
@@ -1227,9 +1310,12 @@
         chip.classList.toggle("edge-mode", !m.cloud_primary_active);
         const subEl = chip.querySelector(".chip-sub");
         if (subEl) {
-          subEl.textContent = m.fallback_label
-            ? m.fallback_label
-            : `${m.call_count}x (${m.last_latency_ms}ms)`;
+          const calls = `${m.call_count} call${m.call_count === 1 ? "" : "s"}`;
+          subEl.textContent = !m.call_count
+            ? "ready"
+            : m.last_latency_ms > 0
+            ? `${calls} · ${(m.last_latency_ms / 1000).toFixed(1)} s`
+            : `${calls} · cached`;
         }
         chip.title = `${m.role} | Provider: ${m.provider} | Calls: ${m.call_count}`;
       });
@@ -1242,7 +1328,7 @@
     const boxEl = document.getElementById("wonder-briefing-box");
     if (!boxEl) return;
     boxEl.classList.remove("hidden");
-    boxEl.innerHTML = "Computing multi-corridor strategic triage plan...";
+    boxEl.innerHTML = `<span class="analyzing">Drafting the briefing…</span>`;
 
     const res = await fetch("/api/incident-briefing", {
       method: "POST",
@@ -1279,7 +1365,7 @@
     const boxEl = document.getElementById("benchmark-tiers-box");
     if (!boxEl) return;
     boxEl.classList.remove("hidden");
-    boxEl.innerHTML = "Running Side-by-Side 3-Tier Failover Benchmark...";
+    boxEl.innerHTML = `<span class="analyzing">Grading this road on all three tiers…</span>`;
 
     const res = await fetch("/api/benchmark-tiers", {
       method: "POST",
@@ -1295,11 +1381,8 @@
         return `
           <div class="benchmark-col">
             <div class="benchmark-col-title">${t.tier_label}</div>
-            <div>Status: <code>${t.tier_status}</code></div>
-            <div>Latency: <strong>${t.latency_ms} ms</strong></div>
-            <div>Severity: <code>${t.damage_severity}</code></div>
-            <div>Span: <strong>${t.min_clear_width_m}m</strong></div>
-            <div>MemClear: <code>${t.memory_cleared}</code></div>
+            <div>${(t.latency_ms / 1000).toFixed(1)} s · <code>${t.damage_severity}</code> · width ${t.min_clear_width_m} m</div>
+            <div class="muted"><code>${t.tier_status}</code></div>
           </div>
         `;
       })
@@ -1355,15 +1438,8 @@
         const labelParent = blackoutToggle.closest(".blackout-switch");
         if (labelParent) labelParent.classList.add("active-blackout");
       }
-      const dot = document.getElementById("network-status-dot");
-      const netText = document.getElementById("network-status-text");
-      if (dot) {
-        dot.classList.remove("online");
-        dot.classList.add("offline");
-      }
-      if (netText) {
-        netText.textContent = "COMMS BLACKOUT (EDGE ONLY)";
-      }
+      setNetworkStatus();
+      setAiPill("tier_2");
       pushFieldDispatch({ force_offline: true });
       const targetEdge = state.activeEdgeId || "0";
       await Promise.all([
@@ -1426,7 +1502,7 @@
   function highlightNumbers(text, unverified) {
     const bad = new Set(unverified || []);
     // Street ordinals ("16th") are names, not measurements, so they are not highlighted.
-    return escapeHtml(text).replace(/(?<![\w.])\d+(?:[.,]\d+)?(?!st\b|nd\b|rd\b|th\b)/g, function (n) {
+    return escapeHtml(text).replace(/(?<![\w.])\d+(?:[.,]\d+)?(?!\d|[.,]\d|st\b|nd\b|rd\b|th\b)/g, function (n) {
       return `<span class="${bad.has(n) ? "num-bad" : "num-ok"}">${n}</span>`;
     });
   }
@@ -1681,12 +1757,88 @@
   }
 
   function switchTab(tabId) {
+    // Clicking the open panel's rail button again returns to the map overview.
+    const current = document.querySelector(".panel-tab.active");
+    if (current && current.getAttribute("data-tab") === tabId && tabId !== "overview") tabId = "overview";
     document.querySelectorAll(".panel-tab").forEach(function (btn) {
       btn.classList.toggle("active", btn.getAttribute("data-tab") === tabId);
     });
     document.querySelectorAll(".tab-content").forEach(function (pane) {
       pane.classList.toggle("active", pane.id === `tab-${tabId}`);
     });
+    document.getElementById("drawer").classList.toggle("hidden", tabId === "overview");
+    relayoutMap();
+  }
+
+  // Popover menus in the top bar and map tools: one open at a time, closed by outside click or Esc.
+  function bindMenus() {
+    function closeAll(except) {
+      document.querySelectorAll("[data-menu]").forEach(function (btn) {
+        const menu = document.getElementById(btn.getAttribute("data-menu"));
+        if (menu && menu !== except) {
+          menu.classList.add("hidden");
+          btn.setAttribute("aria-expanded", "false");
+        }
+      });
+    }
+    document.querySelectorAll("[data-menu]").forEach(function (btn) {
+      btn.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        const menu = document.getElementById(btn.getAttribute("data-menu"));
+        const open = menu.classList.contains("hidden");
+        closeAll(menu);
+        menu.classList.toggle("hidden", !open);
+        btn.setAttribute("aria-expanded", String(open));
+        if (open && btn.id === "vlm-tier-badge") refreshMetaModelsTelemetry();
+      });
+    });
+    document.querySelectorAll(".popover").forEach(function (menu) {
+      menu.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        if (ev.target.closest(".menu-item")) closeAll(null);
+      });
+    });
+    document.addEventListener("click", function () {
+      closeAll(null);
+    });
+    document.addEventListener("keydown", function (ev) {
+      if (ev.key === "Escape") closeAll(null);
+    });
+  }
+
+  // KPI cards: every number comes from the API or the measured road layer.
+  async function refreshSituation() {
+    try {
+      const res = await fetch(`/api/situation?vehicle_class=${encodeURIComponent(state.vehicleClass)}`);
+      if (res.ok) {
+        const d = await res.json();
+        document.getElementById("kpi-reach-val").textContent = String(d.reachable);
+        document.getElementById("kpi-reach-of").textContent = `/ ${d.high_severity_buildings_total}`;
+        document.getElementById("kpi-reach-sub").textContent =
+          `by ${VEHICLE_SHORT[state.vehicleClass].toLowerCase()} from the command post`;
+      }
+    } catch (err) {
+      // KPI cards are informational; the map keeps working without them.
+    }
+    if (state.roadsGeojson) {
+      const roads = new Map();
+      state.roadsGeojson.features.forEach(function (f) {
+        const p = f.properties || {};
+        const key = [String(p.u), String(p.v)].sort().join("-") + `-${p.key || 0}`;
+        roads.set(key, roads.get(key) || Boolean(p[`passable_${state.vehicleClass}`]));
+      });
+      const open = Array.from(roads.values()).filter(Boolean).length;
+      document.getElementById("kpi-roads-label").textContent =
+        `Road segments open to ${VEHICLE_SHORT[state.vehicleClass].toLowerCase()}s`;
+      document.getElementById("kpi-roads-val").textContent = String(open);
+      document.getElementById("kpi-roads-of").textContent = `/ ${roads.size}`;
+      document.getElementById("roads-measured").textContent = String(roads.size);
+    }
+    const top = (state.lastRoiRecommendations || [])[0];
+    document.getElementById("kpi-clear-val").textContent = top ? `+${top.high_severity_structures_unlocked}` : "0";
+    document.getElementById("kpi-clear-sub").textContent = top
+      ? `${top.debris_area_sqm} m² · ${top.road_name}`
+      : "no single pile unlocks more";
   }
 
   function bindUiEvents() {
@@ -1702,24 +1854,14 @@
       });
     });
 
+    document.getElementById("inspector-close").addEventListener("click", closeInspector);
+
     const blackoutToggle = document.getElementById("toggle-comms-blackout");
     blackoutToggle.addEventListener("change", async function (ev) {
       state.forceOffline = Boolean(ev.target.checked);
-      const labelParent = blackoutToggle.closest(".blackout-switch");
-      if (labelParent) {
-        labelParent.classList.toggle("active-blackout", state.forceOffline);
-      }
-      const dot = document.getElementById("network-status-dot");
-      const netText = document.getElementById("network-status-text");
-      if (state.forceOffline) {
-        dot.classList.remove("online");
-        dot.classList.add("offline");
-        netText.textContent = "COMMS BLACKOUT (EDGE ONLY)";
-      } else {
-        dot.classList.remove("offline");
-        dot.classList.add("online");
-        netText.textContent = "LOCAL WI-FI / OFFLINE READY";
-      }
+      setNetworkStatus();
+      if (state.forceOffline) setAiPill("tier_2");
+      else fetchHealth();
       pushFieldDispatch({ force_offline: state.forceOffline });
       if (state.activeEdgeId) {
         await runVlmAssessmentForEdge(state.activeEdgeId);
@@ -1775,7 +1917,7 @@
     const btnFitAoi = document.getElementById("btn-fit-aoi");
     if (btnFitAoi) {
       btnFitAoi.addEventListener("click", function () {
-        applyAoiViewportBounds(true);
+        fitRoads();
       });
     }
 
@@ -1826,9 +1968,10 @@
   document.addEventListener("DOMContentLoaded", async function () {
     initMap();
     bindUiEvents();
+    bindMenus();
     bindAgentUi();
     connectFieldLinkStatus();
-    await fetchHealth();
+    pollWarmup();
     await loadInitialLayers();
     await Promise.all([refreshRoute(), refreshClearanceRoi(), refreshMetaModelsTelemetry()]);
   });

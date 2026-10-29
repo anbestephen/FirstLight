@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#0b1120" />
+  <meta name="theme-color" content="#0a0e15" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <title>FirstLight Field</title>
   <link rel="stylesheet" href="/vendor/leaflet.css" />
@@ -14,15 +14,15 @@
 
   <header class="field-topbar">
     <div class="field-brand">
-      <span class="field-logo" aria-hidden="true">FL</span>
-      <span>FirstLight Field</span>
+      <span class="field-logo" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M3 18h18"/><path d="M6 18a6 6 0 0 1 12 0"/><path d="M12 6V3"/></svg></span>
+      <span>FirstLight</span>
     </div>
     <div class="field-pills">
       <span class="fpill" id="link-pill" title="Live link to the command laptop over local Wi-Fi">
         <span class="fdot" id="link-dot"></span>
         <span id="link-text">Connecting…</span>
       </span>
-      <span class="fpill" id="ai-pill" title="Where AI reasoning currently runs">AI: —</span>
+      <span class="fpill" id="ai-pill" title="Where AI reasoning currently runs">AI · —</span>
     </div>
   </header>
 
@@ -35,9 +35,13 @@
   <section class="field-sheet" id="field-sheet">
     <button type="button" class="sheet-handle" id="sheet-handle" aria-label="Show all route steps" aria-expanded="false"></button>
     <div class="sheet-head">
-      <span class="vehicle-chip" id="vehicle-chip">—</span>
+      <div class="vehicle-block">
+        <span class="sheet-label">Your vehicle</span>
+        <span class="vehicle-chip" id="vehicle-chip">—</span>
+      </div>
       <span class="route-status" id="route-status">Waiting for dispatch…</span>
     </div>
+    <div class="next-instruction" id="next-instruction"></div>
     <div class="route-metrics">
       <div>
         <div class="metric-val" id="metric-eta">—</div>
@@ -52,7 +56,6 @@
         <div class="metric-label">Blockages avoided</div>
       </div>
     </div>
-    <div class="next-instruction" id="next-instruction"></div>
     <ol class="step-list" id="step-list"></ol>
     <div class="sheet-foot">
       <span id="updated-ago">—</span>

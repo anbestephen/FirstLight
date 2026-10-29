@@ -2,362 +2,354 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>FirstLight — Offline Tactical Disaster Routing &amp; Clearance ROI</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FirstLight · Commander</title>
   <link rel="stylesheet" href="/vendor/leaflet.css" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <!-- Top Tactical Status Bar -->
-  <header class="top-hud">
-    <div class="brand-block">
-      <div class="brand-logo" aria-hidden="true">FL</div>
-      <div>
-        <h1 class="brand-title">FirstLight <span class="brand-sub">SAM 3.1 Geometric Routing</span></h1>
-        <div class="aoi-subtitle" id="aoi-label">AOI: Mexico Beach, FL (US Hwy 98 — Hurricane Michael)</div>
+  <!-- Top bar: brand, vehicle, live status, AI tier (opens the Meta models panel), demo + more menus -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 18h18"/><path d="M6 18a6 6 0 0 1 12 0"/><path d="M12 6V3"/><path d="M5.6 9.6 3.8 7.8"/><path d="M18.4 9.6l1.8-1.8"/></svg>
       </div>
+      <div class="brand-text">
+        <span class="brand-name">FirstLight</span>
+        <span class="brand-sub" id="aoi-label">Hurricane Michael · Mexico Beach, FL</span>
+      </div>
+      <span class="divider" aria-hidden="true"></span>
+      <span class="brand-meta" id="brand-meta">Imagery Oct 11, 2018 · <span id="roads-measured">–</span> roads measured by SAM 3.1</span>
     </div>
 
-    <!-- Vehicle Class Selector Toggle -->
-    <div class="vehicle-selector" role="tablist" aria-label="Vehicle Class Selector">
+    <div class="segmented vehicle-selector" role="group" aria-label="Vehicle">
       <button type="button" class="vehicle-btn" data-vehicle="atv" id="btn-vehicle-atv">
-        <span class="v-name">ATV / Foot</span>
-        <span class="v-thresh">&ge; 1.2m</span>
+        <span class="v-name">ATV</span> <span class="v-thresh">&gt;1.2 m</span>
       </button>
       <button type="button" class="vehicle-btn" data-vehicle="ambulance" id="btn-vehicle-ambulance">
-        <span class="v-name">Ambulance</span>
-        <span class="v-thresh">&ge; 2.2m</span>
+        <span class="v-name">Ambulance</span> <span class="v-thresh">&gt;2.2 m</span>
       </button>
       <button type="button" class="vehicle-btn active" data-vehicle="fire_engine" id="btn-vehicle-fire_engine">
-        <span class="v-name">Fire Engine</span>
-        <span class="v-thresh">&ge; 3.5m</span>
+        <span class="v-name">Fire engine</span> <span class="v-thresh">&gt;3.5 m</span>
       </button>
     </div>
 
-    <!-- Comms Blackout Switch, Export Manifest & Hardware Badges -->
-    <div class="status-pills">
-      <label class="blackout-switch" for="toggle-comms-blackout" title="Bypass Cloud API and force instant Apple Silicon Edge Failover">
-        <input type="checkbox" id="toggle-comms-blackout" />
-        <span class="blackout-slider"></span>
-        <span class="blackout-label">Simulate Comms Blackout (Force Edge Mode)</span>
-      </label>
-
-      <button type="button" class="action-btn btn-export" id="btn-export-manifest" title="Download Route, Turn-by-Turn Steps, and Top ROI Choke Points as GeoJSON">
-        Export Field Manifest (GeoJSON)
-      </button>
-
-      <div class="pill pill-net" id="network-status-pill" title="100% Local Wi-Fi / Air-Gapped Ready">
+    <div class="topbar-right">
+      <div class="pill" id="network-status-pill" title="Internet uplink and local Wi-Fi status">
         <span class="status-dot online" id="network-status-dot"></span>
-        <span id="network-status-text">LOCAL WI-FI READY</span>
+        <span id="network-status-text">Online</span>
       </div>
-      <div class="pill pill-field" id="field-link-pill" title="Field devices following this dispatch over local Wi-Fi">
+      <div class="pill" id="field-link-pill" title="Field phones following this dispatch over local Wi-Fi">
         <span class="status-dot" id="field-link-dot"></span>
-        <span id="field-link-text">FIELD LINK: 0 DEVICES</span>
+        <span id="field-link-text">0 field devices</span>
       </div>
-      <div class="pill pill-tier" id="vlm-tier-badge" title="Active 3-Tier VLM Circuit Breaker State">
-        TIER 2: APPLE SILICON MLX 4-BIT
+
+      <div class="menu-wrap">
+        <button type="button" class="pill pill-ai" id="vlm-tier-badge" aria-haspopup="true" aria-expanded="false"
+                data-menu="models-menu" title="Which Meta model is answering; click for all models">AI · Meta Cloud</button>
+        <div class="popover popover-wide hidden" id="models-menu" role="dialog" aria-label="Meta models">
+          <div class="popover-head">
+            <span>Meta models in FirstLight</span>
+            <span class="muted" id="warmup-status"></span>
+          </div>
+          <div class="model-list" id="meta-models-badges">
+            <div class="meta-model-chip" data-model="sam-3.1" id="chip-sam-3-1">
+              <strong>SAM 3.1</strong><span class="chip-role">Road, debris and water masks → widths</span><em class="chip-sub">on this laptop</em>
+            </div>
+            <div class="meta-model-chip" data-model="muse-spark-1.3" id="chip-muse-spark">
+              <strong>Muse Spark 1.3</strong><span class="chip-role">Agent, building and road grading</span><em class="chip-sub">Meta Cloud</em>
+            </div>
+            <div class="meta-model-chip" data-model="open-weight-mlx-4bit" id="chip-edge-mlx">
+              <strong>Muse Glimmer 30B</strong><span class="chip-role">Offline agent and grading (MLX 4-bit)</span><em class="chip-sub">on this laptop</em>
+            </div>
+            <div class="meta-model-chip" data-model="muse-voice-transcribe-1.0" id="chip-muse-voice">
+              <strong>Muse Voice 1.0</strong><span class="chip-role">Push-to-talk questions</span><em class="chip-sub">Meta Cloud</em>
+            </div>
+            <div class="meta-model-chip" data-model="muse-wonder-1.0" id="chip-muse-wonder">
+              <strong>Muse Wonder 1.0</strong><span class="chip-role">Incident briefing (experimental)</span><em class="chip-sub">Meta Cloud</em>
+            </div>
+            <div class="meta-model-chip" data-model="muse-image-1.0" id="chip-muse-image">
+              <strong>Muse Image 1.0</strong><span class="chip-role">Recon schematic (experimental)</span><em class="chip-sub">Meta Cloud</em>
+            </div>
+          </div>
+          <label class="switch-row" for="toggle-comms-blackout" title="Skip Meta Cloud and answer with the on-device model">
+            <span>
+              <strong>Simulate comms blackout</strong>
+              <span class="muted">Force the on-device model, as if the router were unplugged</span>
+            </span>
+            <span class="switch"><input type="checkbox" id="toggle-comms-blackout" /><span class="switch-track"></span></span>
+          </label>
+          <div class="popover-foot muted" id="hw-status-badge">MPS fp16 · 0.2804 m/px</div>
+        </div>
       </div>
-      <div class="pill pill-hw" id="hw-status-badge" title="Apple Silicon M1 Max Precision &amp; GSD">
-        MPS fp16 &bull; 0.2804 m/px
+
+      <div class="menu-wrap">
+        <button type="button" class="icon-btn" aria-haspopup="true" aria-expanded="false" data-menu="demo-menu"
+                aria-label="Demo scenarios" title="Demo scenarios">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M7 4v16l13-8z"/></svg>
+        </button>
+        <div class="popover hidden" id="demo-menu" role="menu" aria-label="Demo scenarios">
+          <div class="popover-head"><span>Guided scenarios</span></div>
+          <div class="demo-scenarios-bar" id="demo-scenarios-bar">
+            <button type="button" class="menu-item demo-scenario-btn" id="btn-scenario-1" data-scenario="1">
+              <strong>1 · Vehicle-specific routing</strong><span class="muted">Same block, different answer per vehicle</span>
+            </button>
+            <button type="button" class="menu-item demo-scenario-btn" id="btn-scenario-2" data-scenario="2">
+              <strong>2 · SAM 3.1 measurement</strong><span class="muted">Replay the 5 m cross-sections on the top pile</span>
+            </button>
+            <button type="button" class="menu-item demo-scenario-btn" id="btn-scenario-3" data-scenario="3">
+              <strong>3 · Comms blackout</strong><span class="muted">Cloud vs laptop vs rules on one road</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="menu-wrap">
+        <button type="button" class="icon-btn" aria-haspopup="true" aria-expanded="false" data-menu="more-menu"
+                aria-label="More" title="More">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+        </button>
+        <div class="popover hidden" id="more-menu" role="menu" aria-label="More">
+          <button type="button" class="menu-item" id="btn-export-manifest">
+            <strong>Export field manifest</strong><span class="muted">Route, steps and clearance queue as GeoJSON</span>
+          </button>
+          <a class="menu-item" href="/field" target="_blank" rel="noopener">
+            <strong>Open field phone view</strong><span class="muted">What responders see over local Wi-Fi</span>
+          </a>
+        </div>
       </div>
     </div>
   </header>
 
-  <!-- Meta AI 6-Model Telemetry Strip & Tactical Voice Radio Bar -->
-  <section class="meta-telemetry-strip" id="meta-telemetry-strip" aria-label="Meta AI Model Suite Telemetry">
-    <div class="meta-models-group" id="meta-models-badges">
-      <span class="meta-suite-label">META AI SUITE:</span>
-      <span class="meta-model-chip active" data-model="sam-3.1" id="chip-sam-3-1">
-        <strong>SAM 3.1</strong> <em class="chip-sub">MPS fp16</em>
-      </span>
-      <span class="meta-model-chip active" data-model="muse-spark-1.3" id="chip-muse-spark">
-        <strong>Muse Spark 1.3</strong> <em class="chip-sub">VLM Triage</em>
-      </span>
-      <span class="meta-model-chip active" data-model="muse-wonder-1.0" id="chip-muse-wonder">
-        <strong>Muse Wonder 1.0</strong> <em class="chip-sub">Cmd Advisor</em>
-      </span>
-      <span class="meta-model-chip active" data-model="muse-voice-transcribe-1.0" id="chip-muse-voice">
-        <strong>Muse Voice 1.0</strong> <em class="chip-sub">Push-to-talk</em>
-      </span>
-      <span class="meta-model-chip active" data-model="muse-image-1.0" id="chip-muse-image">
-        <strong>Muse Image 1.0</strong> <em class="chip-sub">Recon Overlay</em>
-      </span>
-      <span class="meta-model-chip active" data-model="open-weight-mlx-4bit" id="chip-edge-mlx">
-        <strong>Edge MLX</strong> <em class="chip-sub">Muse-Glimmer-30B-4bit</em>
-      </span>
-    </div>
-  </section>
-
-  <!-- Guided 1-Click Live Demo Scenario Bar -->
-  <section class="demo-scenarios-bar" id="demo-scenarios-bar" aria-label="Live Demo Scenarios">
-    <span class="demo-bar-label">LIVE DEMO SCENARIOS:</span>
-    <div class="demo-btn-group">
-      <button type="button" class="action-btn demo-scenario-btn" id="btn-scenario-1" data-scenario="1">
-        Scenario 1: Differential Vehicle Routing
+  <div class="shell">
+    <!-- Left rail: map overview plus the three working panels -->
+    <nav class="rail" aria-label="Panels">
+      <button type="button" class="rail-btn panel-tab active" data-tab="overview" id="tab-btn-overview">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg>
+        <span>Overview</span>
       </button>
-      <button type="button" class="action-btn demo-scenario-btn" id="btn-scenario-2" data-scenario="2">
-        Scenario 2: SAM 3.1 5m Caliper &amp; ROI Rescue
+      <button type="button" class="rail-btn panel-tab" data-tab="roi" id="tab-btn-roi">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18M5 20l2-8h10l2 8M9 12l1-6h4l1 6"/></svg>
+        <span>Clear</span>
       </button>
-      <button type="button" class="action-btn demo-scenario-btn" id="btn-scenario-3" data-scenario="3">
-        Scenario 3: Air-Gap Blackout &amp; 3-Tier Benchmark
+      <button type="button" class="rail-btn panel-tab" data-tab="steps" id="tab-btn-steps">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM18 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM8 17h7a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h7"/></svg>
+        <span>Route <em class="rail-count" id="steps-count">0</em></span>
       </button>
-    </div>
-  </section>
+      <button type="button" class="rail-btn panel-tab" data-tab="assess" id="tab-btn-assess">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+        <span>Assess</span>
+      </button>
+    </nav>
 
-  <!-- Ask FirstLight: Muse Spark commander agent -->
-  <section class="agent-bar" id="agent-bar" aria-label="Ask FirstLight">
-    <form class="agent-form" id="agent-form" autocomplete="off">
-      <span class="demo-bar-label">ASK FIRSTLIGHT:</span>
-      <input type="text" id="agent-input" class="agent-input" maxlength="500"
-             placeholder="e.g. Get an ambulance to the worst-hit block" aria-label="Ask the commander agent" />
-      <button type="button" class="action-btn agent-mic-btn" id="agent-mic-btn" aria-pressed="false"
-              title="Push to talk: speak your question (Muse Voice Transcribe)">&#x1F399; Talk</button>
-      <button type="submit" class="action-btn agent-ask-btn" id="agent-ask-btn">Ask</button>
-      <span class="agent-voice-status" id="agent-voice-status" aria-live="polite"></span>
-    </form>
-    <div class="agent-suggestions">
-      <button type="button" class="agent-chip" data-q="Get an ambulance to the worst-hit block">Ambulance to worst-hit block</button>
-      <button type="button" class="agent-chip" data-q="Which debris pile should we clear first for fire engines?">What to clear first?</button>
-      <button type="button" class="agent-chip" data-q="Is 15th Street passable for an ambulance?">Is 15th Street passable?</button>
-    </div>
-  </section>
+    <!-- Drawer for the Clear / Route / Assess panels (hidden on Overview) -->
+    <aside class="drawer hidden" id="drawer" aria-label="Panel">
+      <div class="tab-content" id="tab-overview"></div>
 
-  <!-- Main Responsive Workspace -->
-  <main class="workspace">
-    <!-- Map Viewport -->
-    <section class="map-section">
-      <div id="map" class="map-canvas" aria-label="Mexico Beach Tactical Map"></div>
-      <div class="caliper-scan-readout hidden" id="caliper-scan-readout" role="status" aria-live="polite"></div>
-      <aside class="agent-panel hidden" id="agent-panel" aria-live="polite">
-        <div class="agent-panel-head">
-          <span class="agent-tier" id="agent-tier">—</span>
-          <button type="button" class="agent-close" id="agent-close" aria-label="Close">×</button>
-        </div>
-        <div class="agent-question" id="agent-question"></div>
-        <ol class="agent-steps" id="agent-steps"></ol>
-        <div class="agent-answer" id="agent-answer"></div>
-        <div class="agent-verify" id="agent-verify"></div>
-      </aside>
-
-      <!-- Floating Map Controls & Legend -->
-      <div class="map-overlay-bar">
-        <div class="legend-group">
-          <span class="legend-item"><i class="swatch swatch-passable"></i>Passable (&ge;3.5m)</span>
-          <span class="legend-item"><i class="swatch swatch-debris"></i>Restricted (1.2–3.5m)</span>
-          <span class="legend-item"><i class="swatch swatch-pinch"></i>Pinch Point Ray</span>
-          <span class="legend-item"><i class="swatch swatch-water"></i>Water (Weight=&infin;)</span>
-          <span class="legend-item"><i class="swatch swatch-unlocked"></i>Unlocked Structure</span>
-          <span class="legend-item"><i class="swatch swatch-route"></i>Active Route</span>
-        </div>
-        <div class="map-actions">
-          <label class="toggle-label highlight-toggle">
-            <input type="checkbox" id="toggle-caliper-rays" checked />
-            <span>Show SAM 3.1 Masks &amp; 5m Caliper Rays</span>
-          </label>
-          <label class="toggle-label">
-            <input type="checkbox" id="toggle-raster" checked />
-            <span>NOAA Imagery</span>
-          </label>
-          <label class="toggle-label">
-            <input type="checkbox" id="toggle-buildings" checked />
-            <span>Buildings</span>
-          </label>
-          <button type="button" class="action-btn" id="btn-pick-origin" title="Tap map to set route origin">
-            Set Origin
-          </button>
-          <button type="button" class="action-btn" id="btn-pick-dest" title="Tap map to set route destination">
-            Set Dest
-          </button>
-          <button type="button" class="action-btn btn-reset" id="btn-reset-sim" title="Reset simulated debris clearances">
-            Reset Sim (<span id="cleared-count">0</span>)
-          </button>
-          <button type="button" class="action-btn" id="btn-fit-aoi" title="Snap map view to full Mexico Beach AOI corridor">
-            Fit AOI
-          </button>
-        </div>
-      </div>
-
-      <!-- Prominent Unlocked Civilian Structures Impact Callout Banner -->
-      <div class="unlocked-impact-banner hidden" id="unlocked-impact-banner" role="status" aria-live="polite">
-        <span class="impact-icon">&#x1F3E0;</span>
-        <span class="impact-text" id="unlocked-impact-text">
-          +0 High-Severity Structures Unlocked | Clearance ROI: 0.00 structures/m&sup2;
-        </span>
-      </div>
-
-      <!-- Active Route Telemetry Banner -->
-      <div class="route-banner" id="route-banner">
-        <div class="route-metrics">
-          <div class="metric-box">
-            <span class="metric-label">ACTIVE CLASS</span>
-            <span class="metric-val" id="route-class-label">Fire Engine (&ge;3.5m)</span>
-          </div>
-          <div class="metric-box">
-            <span class="metric-label">STATUS</span>
-            <span class="metric-val" id="route-status-val">Computing...</span>
-          </div>
-          <div class="metric-box">
-            <span class="metric-label">DISTANCE</span>
-            <span class="metric-val" id="route-distance-val">-- m</span>
-          </div>
-          <div class="metric-box">
-            <span class="metric-label">EST. TRANSIT</span>
-            <span class="metric-val" id="route-eta-val">-- s</span>
-          </div>
-          <div class="metric-box">
-            <span class="metric-label">DETOURS</span>
-            <span class="metric-val" id="route-detours-val">0</span>
-          </div>
-        </div>
-        <div class="route-rationale" id="route-rationale-text">
-          Initializing Mexico Beach OSM road graph and SAM 3.1 cross-sectional measurements...
-        </div>
-        <div class="multi-class-mini" id="multi-class-comparison"></div>
-      </div>
-    </section>
-
-    <!-- Side Panel / Mobile Bottom Drawer: Corridor AI Inspector & Choke-Point Clearance ROI -->
-    <aside class="side-panel">
-      <!-- Live Corridor AI Inspector Card (Always visible when a corridor/choke point is inspected) -->
-      <div class="inspector-dock" id="corridor-inspector-dock">
-        <div class="inspector-header">
-          <span class="inspector-title">CORRIDOR AI INSPECTOR (SAM 3.1 + VLM)</span>
-          <span class="inspector-tier-pill" id="inspector-tier-pill">Tier 2: Apple Silicon MLX 4-bit</span>
-        </div>
-        <div class="inspector-body">
-          <div class="crop-frame">
-            <div class="crop-mode-tabs" role="tablist" aria-label="Corridor Visual Mode">
-              <button type="button" class="crop-tab-btn active" id="btn-view-crop" data-view="crop">
-                NOAA Crop
-              </button>
-              <button type="button" class="crop-tab-btn" id="btn-view-schematic" data-view="schematic">
-                Deterministic Caliper Overlay (Muse Image Offline)
-              </button>
-            </div>
-            <img id="inspector-crop-img" src="/api/raster-preview.png" alt="NOAA 256x256 Corridor Aerial Patch" />
-            <div class="crop-caption" id="inspector-crop-caption">256&times;256 NOAA GeoTIFF Crop</div>
-          </div>
-          <div class="inspector-telemetry">
-            <div class="insp-road-name" id="inspector-road-name">Select a Choke Point or Road</div>
-            <div class="insp-caliper-reading" id="inspector-caliper-reading">
-              Pinch Span: <strong>-- m</strong> (GSD: 0.2804 m/px)
-            </div>
-            <div class="insp-meta-row" id="inspector-latency-row">
-              Latency: <strong>-- ms</strong> &bull; Memory Cleared: <strong>true</strong>
-            </div>
-            <div class="insp-severity-row" id="inspector-severity-row">
-              Building: <code>--</code> &bull; Road: <code>--</code>
-            </div>
-            <div class="insp-conf-row" id="inspector-sam-conf-row">
-              <span>SAM 3.1 Confidence: <strong id="inspector-sam-conf-val">--</strong></span>
-              <span class="drone-recon-badge high-conf" id="inspector-drone-recon-badge">[ HIGH CONFIDENCE GEOMETRY ]</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Cross-Section Caliper Threshold Gauge -->
-        <div class="caliper-gauge-card" id="caliper-threshold-gauge">
-          <div class="gauge-header-row">
-            <span class="gauge-title">CROSS-SECTION CALIPER THRESHOLD GAUGE</span>
-            <span class="gauge-span-value" id="gauge-measured-span-label">Measured: -- m</span>
-          </div>
-          <div class="gauge-track-wrapper">
-            <div class="gauge-track">
-              <div class="gauge-fill" id="caliper-gauge-fill" style="width: 0%;"></div>
-              <!-- Explicit Vertical Threshold Markers (0m to 6.0m scale) -->
-              <div class="gauge-marker" style="left: 20%;" title="ATV / Foot Minimum Width: 1.2m">
-                <span class="marker-line"></span>
-                <span class="marker-tag">ATV 1.2m</span>
-              </div>
-              <div class="gauge-marker" style="left: 36.67%;" title="Ambulance Minimum Width: 2.2m">
-                <span class="marker-line"></span>
-                <span class="marker-tag">Amb 2.2m</span>
-              </div>
-              <div class="gauge-marker" style="left: 58.33%;" title="Fire Engine Minimum Width: 3.5m">
-                <span class="marker-line"></span>
-                <span class="marker-tag">Fire 3.5m</span>
-              </div>
-            </div>
-          </div>
-          <div class="gauge-badges-row" id="gauge-vehicle-badges">
-            <span class="gauge-v-badge pass" id="gauge-badge-atv">ATV (&ge;1.2m): PASS</span>
-            <span class="gauge-v-badge pass" id="gauge-badge-ambulance">Ambulance (&ge;2.2m): PASS</span>
-            <span class="gauge-v-badge blocked" id="gauge-badge-fire_engine">Fire Engine (&ge;3.5m): BLOCKED</span>
-          </div>
-        </div>
-
-        <div class="inspector-rationale" id="inspector-rationale-text">
-          Click any Choke-Point ROI card below or tap a road segment on the map to project 5.0m orthogonal SAM 3.1 caliper rays and run live VLM damage grading.
-        </div>
-
-        <!-- Side-by-Side 3-Tier Failover Benchmark Controls & Table -->
-        <div class="benchmark-dock-section">
-          <button type="button" class="action-btn btn-benchmark-tiers" id="btn-benchmark-tiers">
-            &#x2696; Compare Cloud vs. Edge MLX Tiers (3-Tier Benchmark)
-          </button>
-          <div class="benchmark-tiers-box hidden" id="benchmark-tiers-box"></div>
-        </div>
-      </div>
-
-      <!-- Panel Tabs -->
-      <div class="panel-tabs">
-        <button type="button" class="panel-tab active" data-tab="roi" id="tab-btn-roi">
-          Choke-Point ROI Queue
-        </button>
-        <button type="button" class="panel-tab" data-tab="steps" id="tab-btn-steps">
-          Turn-by-Turn (<span id="steps-count">0</span>)
-        </button>
-        <button type="button" class="panel-tab" data-tab="assess" id="tab-btn-assess">
-          Circuit Breaker Log
-        </button>
-      </div>
-
-      <!-- Tab 1: Choke-Point Clearance ROI Priority Queue -->
-      <div class="tab-content active" id="tab-roi">
-        <div class="wonder-briefing-bar">
-          <button type="button" class="action-btn btn-wonder" id="btn-wonder-briefing">
-            &#x26A1; Generate Muse Wonder Incident Briefing
-          </button>
-          <div class="wonder-briefing-box hidden" id="wonder-briefing-box"></div>
-        </div>
-        <div class="panel-header-note">
-          Ranked strictly by <strong>Structures Unlocked / m&sup2; Debris Cleared</strong>.
-          Click a card to render <strong>5m Caliper Rays</strong> &amp; aerial crop, or tap <em>Simulate Clearance</em>.
+      <div class="tab-content" id="tab-roi">
+        <div class="drawer-head">
+          <h2>What to clear first</h2>
+          <p class="muted">Debris piles ranked by severely damaged buildings unlocked per m² cleared. Click one to measure it.</p>
         </div>
         <div class="roi-list" id="roi-queue-list"></div>
+        <div class="wonder-briefing-bar">
+          <button type="button" class="btn btn-ghost" id="btn-wonder-briefing">Draft incident briefing (Muse Wonder, experimental)</button>
+          <div class="wonder-briefing-box hidden" id="wonder-briefing-box"></div>
+        </div>
       </div>
 
-      <!-- Tab 2: Turn-by-Turn Route Edge Passability Steps -->
       <div class="tab-content" id="tab-steps">
-        <div class="panel-header-note">
-          Orthogonal 5m cross-section clearance telemetry along the active route.
+        <div class="drawer-head">
+          <h2>Active route</h2>
+          <p class="muted" id="route-rationale-text">Loading the road graph and SAM 3.1 measurements…</p>
         </div>
+        <div class="route-compare" id="multi-class-comparison"></div>
         <div class="steps-list" id="route-steps-list"></div>
       </div>
 
-      <!-- Tab 3: 3-Tier VLM Damage Grading & Circuit Breaker Inspector -->
       <div class="tab-content" id="tab-assess">
-        <div class="panel-header-note">
-          Inspect any road bottleneck or building cluster through the 3-Tier VLM Failover Router.
+        <div class="drawer-head">
+          <h2>Model tiers</h2>
+          <p class="muted">Grade the selected road with Meta Cloud, the on-device model, or rules only, and see the full fallback chain.</p>
         </div>
         <div class="vlm-controls">
-          <label for="select-failover-mode">Circuit Breaker Override:</label>
-          <select id="select-failover-mode" class="mode-select">
-            <option value="auto">AUTO (Tier 1 Cloud &rarr; Tier 2 MLX &rarr; Tier 3 Geom)</option>
-            <option value="force_mlx">FORCE TIER 2 (Local Apple Silicon MLX 4-bit)</option>
-            <option value="force_deterministic">FORCE TIER 3 (Deterministic Geometry)</option>
-            <option value="force_cloud">FORCE TIER 1 (Cloud Meta API 2.5s timeout)</option>
+          <label for="select-failover-mode" class="field-label">Tier</label>
+          <select id="select-failover-mode" class="select">
+            <option value="auto">Automatic (Cloud → laptop → rules)</option>
+            <option value="force_mlx">On-device Muse Glimmer only</option>
+            <option value="force_deterministic">Rules only (no model)</option>
+            <option value="force_cloud">Meta Cloud only</option>
           </select>
-          <button type="button" class="action-btn btn-primary" id="btn-run-assess">
-            Re-Run Corridor VLM Triage
-          </button>
+          <button type="button" class="btn btn-primary" id="btn-run-assess">Grade selected road</button>
         </div>
-        <div class="assess-card" id="assess-result-box">
-          Tap a bottleneck card or road segment on the map to view full fallback chain diagnostics.
+        <div class="assess-card" id="assess-result-box">Select a road on the map or in the clearance list.</div>
+        <div class="benchmark-dock-section">
+          <button type="button" class="btn btn-ghost" id="btn-benchmark-tiers">Compare all three tiers on this road</button>
+          <div class="benchmark-tiers-box hidden" id="benchmark-tiers-box"></div>
         </div>
       </div>
     </aside>
-  </main>
+
+    <!-- Full-bleed map stage -->
+    <main class="stage">
+      <div id="map" class="map-canvas" aria-label="Mexico Beach map"></div>
+
+      <section class="kpis" aria-label="Situation">
+        <div class="kpi" id="kpi-reach">
+          <span class="kpi-label">Damaged buildings reachable</span>
+          <div class="kpi-value"><span class="num warn" id="kpi-reach-val">–</span><span class="of" id="kpi-reach-of"></span></div>
+          <span class="kpi-sub" id="kpi-reach-sub">from the command post</span>
+        </div>
+        <div class="kpi" id="kpi-roads">
+          <span class="kpi-label" id="kpi-roads-label">Roads open</span>
+          <div class="kpi-value"><span class="num" id="kpi-roads-val">–</span><span class="of" id="kpi-roads-of"></span></div>
+          <span class="kpi-sub">measured by SAM 3.1 every 5 m</span>
+        </div>
+        <div class="kpi" id="kpi-clear">
+          <span class="kpi-label">Best next clearance</span>
+          <div class="kpi-value"><span class="num ok" id="kpi-clear-val">–</span><span class="of">bldgs</span></div>
+          <span class="kpi-sub" id="kpi-clear-sub">–</span>
+        </div>
+        <!-- Active route summary -->
+        <div class="kpi kpi-route route-banner" id="route-banner">
+          <span class="kpi-label">Route · <span id="route-class-label">Fire engine</span></span>
+          <div class="kpi-value"><span class="num" id="route-status-val">…</span></div>
+          <span class="kpi-sub"><span id="route-distance-val">– m</span> · <span id="route-eta-val">– s</span> · <span id="route-detours-val">0</span> blockages avoided</span>
+        </div>
+      </section>
+
+      <div class="toast unlocked-impact-banner hidden" id="unlocked-impact-banner" role="status" aria-live="polite">
+        <span class="toast-dot" aria-hidden="true"></span>
+        <span id="unlocked-impact-text"></span>
+      </div>
+      <div class="caliper-scan-readout hidden" id="caliper-scan-readout" role="status" aria-live="polite"></div>
+
+      <!-- Ask FirstLight answer panel -->
+      <aside class="agent-panel hidden" id="agent-panel" aria-live="polite" aria-label="Ask FirstLight answer">
+        <div class="agent-panel-head">
+          <span class="agent-title">Ask FirstLight</span>
+          <span class="agent-tier" id="agent-tier">—</span>
+          <button type="button" class="icon-btn small" id="agent-close" aria-label="Close">×</button>
+        </div>
+        <div class="agent-body">
+          <div class="agent-question" id="agent-question"></div>
+          <ol class="agent-steps" id="agent-steps"></ol>
+          <div class="agent-answer" id="agent-answer"></div>
+        </div>
+        <div class="agent-verify" id="agent-verify"></div>
+      </aside>
+
+      <!-- Legend -->
+      <div class="legend" aria-label="Legend">
+        <span class="legend-item"><i class="sw sw-open"></i>Open</span>
+        <span class="legend-item"><i class="sw sw-narrow"></i>Too narrow</span>
+        <span class="legend-item"><i class="sw sw-blocked"></i>Blocked</span>
+        <span class="legend-item"><i class="sw sw-water"></i>Water</span>
+        <span class="legend-item"><i class="sw sw-route"></i>Route</span>
+      </div>
+
+      <!-- Map tools (zoom control is added here by Leaflet's bottom-right corner) -->
+      <div class="map-tools" aria-label="Map tools">
+        <div class="menu-wrap">
+          <button type="button" class="tool-btn" data-menu="layers-menu" aria-haspopup="true" aria-expanded="false" aria-label="Map layers" title="Map layers">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>
+          </button>
+          <div class="popover popover-up hidden" id="layers-menu" role="dialog" aria-label="Map layers">
+            <label class="check-row"><input type="checkbox" id="toggle-caliper-rays" checked /> SAM 3.1 masks and cross-sections</label>
+            <label class="check-row"><input type="checkbox" id="toggle-raster" checked /> NOAA post-storm imagery</label>
+            <label class="check-row"><input type="checkbox" id="toggle-buildings" checked /> Buildings (Muse Spark grades)</label>
+          </div>
+        </div>
+        <button type="button" class="tool-btn" id="btn-pick-origin" title="Set route start: then click the map" aria-label="Set route start">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="4"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+        </button>
+        <button type="button" class="tool-btn" id="btn-pick-dest" title="Set route destination: then click the map" aria-label="Set route destination">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 21s-7-6.5-7-12a7 7 0 0 1 14 0c0 5.5-7 12-7 12z"/><circle cx="12" cy="9" r="2.5"/></svg>
+        </button>
+        <button type="button" class="tool-btn" id="btn-fit-aoi" title="Fit the road network" aria-label="Fit the road network">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+        </button>
+        <button type="button" class="tool-btn tool-reset" id="btn-reset-sim" title="Undo all simulated clearances" aria-label="Undo simulated clearances">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+          <span class="tool-badge" id="cleared-count">0</span>
+        </button>
+      </div>
+
+      <!-- Ask FirstLight command bar -->
+      <section class="command" id="agent-bar" aria-label="Ask FirstLight">
+        <div class="agent-suggestions">
+          <button type="button" class="agent-chip" data-q="Get an ambulance to the worst-hit block">Ambulance to the worst-hit block</button>
+          <button type="button" class="agent-chip" data-q="Which debris pile should we clear first for fire engines?">What to clear first?</button>
+          <button type="button" class="agent-chip" data-q="Is 15th Street passable for an ambulance?">Is 15th Street passable?</button>
+        </div>
+        <form class="agent-form" id="agent-form" autocomplete="off">
+          <svg class="agent-spark" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M6 6l2 2M16 16l2 2M6 18l2-2M16 8l2-2"/></svg>
+          <input type="text" id="agent-input" class="agent-input" maxlength="500"
+                 placeholder="Ask anything, e.g. which pile should we clear first?" aria-label="Ask FirstLight" />
+          <span class="agent-voice-status" id="agent-voice-status" aria-live="polite"></span>
+          <button type="button" class="btn btn-mic agent-mic-btn" id="agent-mic-btn" aria-pressed="false"
+                  title="Push to talk: speak your question (Muse Voice Transcribe)">&#x1F399; Talk</button>
+          <button type="submit" class="btn btn-primary agent-ask-btn" id="agent-ask-btn">Ask</button>
+        </form>
+      </section>
+    </main>
+
+    <!-- Road inspector (opens when a road or clearance card is selected) -->
+    <aside class="inspector inspector-dock hidden" id="corridor-inspector-dock" aria-label="Road inspector">
+      <div class="insp-head">
+        <div class="insp-head-row">
+          <span class="chip" id="inspector-status-chip">Measuring…</span>
+          <button type="button" class="icon-btn small" id="inspector-close" aria-label="Close road inspector">×</button>
+        </div>
+        <h2 class="insp-road-name" id="inspector-road-name">Select a road</h2>
+        <div class="insp-width">
+          <span class="insp-width-val" id="gauge-measured-span-label">– m</span>
+          <span class="muted">narrowest clear width</span>
+        </div>
+        <div class="gauge-badges-row" id="gauge-vehicle-badges">
+          <span class="gauge-v-badge" id="gauge-badge-atv">ATV</span>
+          <span class="gauge-v-badge" id="gauge-badge-ambulance">Ambulance</span>
+          <span class="gauge-v-badge" id="gauge-badge-fire_engine">Fire engine</span>
+        </div>
+      </div>
+
+      <section class="insp-section caliper-gauge-card" id="caliper-threshold-gauge">
+        <div class="section-title"><h3>Width vs vehicle thresholds</h3><span class="muted insp-caliper-reading" id="inspector-caliper-reading"></span></div>
+        <div class="gauge-track">
+          <div class="gauge-fill" id="caliper-gauge-fill" style="width: 0%;"></div>
+          <div class="gauge-marker" style="left: 20%;" title="ATV needs 1.2 m"><span class="marker-line"></span><span class="marker-tag">ATV 1.2</span></div>
+          <div class="gauge-marker" style="left: 36.67%;" title="Ambulance needs 2.2 m"><span class="marker-line"></span><span class="marker-tag">Amb 2.2</span></div>
+          <div class="gauge-marker" style="left: 58.33%;" title="Fire engine needs 3.5 m"><span class="marker-line"></span><span class="marker-tag">Fire 3.5</span></div>
+        </div>
+        <div class="gauge-scale"><span>0 m</span><span>6 m</span></div>
+      </section>
+
+      <section class="insp-section">
+        <div class="crop-frame">
+          <div class="segmented small crop-mode-tabs" role="group" aria-label="Image">
+            <button type="button" class="crop-tab-btn active" id="btn-view-crop" data-view="crop">Aerial</button>
+            <button type="button" class="crop-tab-btn" id="btn-view-schematic" data-view="schematic">Schematic</button>
+          </div>
+          <img id="inspector-crop-img" src="/api/raster-preview.png" alt="Aerial image of the selected road" />
+          <div class="crop-caption" id="inspector-crop-caption">NOAA post-storm aerial</div>
+        </div>
+      </section>
+
+      <section class="insp-section">
+        <div class="section-title"><h3>Damage grading</h3><span class="chip chip-ai inspector-tier-pill" id="inspector-tier-pill">—</span></div>
+        <div class="kv" id="inspector-severity-row">Building: – · Road: –</div>
+        <div class="kv muted" id="inspector-latency-row"></div>
+        <div class="kv insp-conf-row" id="inspector-sam-conf-row">
+          <span>SAM 3.1 confidence <strong id="inspector-sam-conf-val">–</strong></span>
+          <span class="drone-recon-badge" id="inspector-drone-recon-badge"></span>
+        </div>
+        <details class="how" open>
+          <summary>How we know</summary>
+          <p class="inspector-rationale" id="inspector-rationale-text">Select a road on the map or a clearance card to measure it.</p>
+        </details>
+      </section>
+    </aside>
+  </div>
 
   <script src="/vendor/leaflet.js"></script>
   <script src="/app.js"></script>

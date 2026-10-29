@@ -1213,6 +1213,12 @@ def get_choke_point_recon_schematic_png(
     return Response(content=schematic_bytes, media_type="image/png", headers=meta_headers)
 
 
+@app.get("/api/situation")
+def get_situation(vehicle_class: str = Query(default="ambulance")) -> dict[str, Any]:
+    """Dashboard KPI: severely damaged buildings this vehicle can reach from the command post."""
+    return get_agent().tools.reachability_summary(vehicle_class)
+
+
 @app.get("/api/meta-models")
 def get_meta_models(
     force_offline: bool = Query(default=False),
