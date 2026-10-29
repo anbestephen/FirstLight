@@ -26,6 +26,7 @@ from src.routing import (
     find_nearest_node,
     normalize_vehicle_class,
     rank_choke_point_clearance_roi,
+    simulate_choke_point_clearance,
 )
 
 VEHICLES = ("atv", "ambulance", "fire_engine")
@@ -78,6 +79,11 @@ class AgentTools:
     def _origin(self, G: nx.MultiDiGraph) -> Any:
         lon, lat = self.ctx.command_post_lonlat()
         return find_nearest_node(G, lon, lat)
+
+    @staticmethod
+    def _node_id(G: nx.MultiDiGraph, text: str) -> Any:
+        """Edge ids are "u-v-key" strings; map each part back to the graph's node id type."""
+        return int(text) if text.isdigit() and int(text) in G else text
 
     def road_names(self) -> list[str]:
         G = self.ctx.graph()
@@ -225,8 +231,15 @@ class AgentTools:
                     alt[other] = r.reachable
             result["other_vehicles_reachable"] = alt
             top = self.rank_clearance(vc, limit=1)["choke_points"]
-            # The network-wide best clearance for this vehicle; it does not necessarily open this route.
-            result["highest_impact_clearance_for_this_vehicle"] = top[0] if top else None
+            best = top[0] if top else None
+            if best is not None:
+                # The network-wide best clearance; computed (not guessed) whether it opens this route.
+                u, v, k = (self._node_id(G, x) for x in best["edge_id"].split("-"))
+                cleared = simulate_choke_point_clearance(G, u, v, int(k))
+                best["opens_this_route"] = compute_shortest_route(
+                    cleared, origin=self._origin(cleared), destination=dest_node, vehicle_class=vc
+                ).reachable
+            result["highest_impact_clearance_for_this_vehicle"] = best
         return result
 
     def rank_clearance(self, vehicle_class: str, limit: int = 3) -> dict[str, Any]:

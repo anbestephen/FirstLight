@@ -125,3 +125,12 @@ def test_dispatch_refuses_destinations_with_no_passable_route(tools: AgentTools)
     result = tools.dispatch_field_unit("fire_engine", blocked["id"])
     assert result["dispatched"] is False
     assert "nothing was sent" in result["reason"]
+
+
+def test_unreachable_route_says_whether_the_best_clearance_opens_it(tools: AgentTools) -> None:
+    hotspots = tools.damage_hotspots(10)["hotspots"]
+    blocked = next(h for h in hotspots if not h["reachable_from_command_post"]["ambulance"])
+    result = tools.plan_route("ambulance", blocked["id"])
+    assert result["reachable"] is False
+    best = result["highest_impact_clearance_for_this_vehicle"]
+    assert isinstance(best["opens_this_route"], bool)
