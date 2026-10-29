@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 import json
+import threading
 from pathlib import Path
 import time
 
@@ -18,6 +19,7 @@ import pytest
 from src.failover import (
     ConnectivityTier,
     GeometricTelemetry,
+    LocalModelPreempted,
     ResidentMLXRuntime,
     VLMFailoverRouter,
 )
@@ -145,7 +147,7 @@ def test_resident_runtime_loads_weights_once_across_requests(fake_mlx_dir: Path)
             json.dumps({"building_damage_severity": "minor_damage", "road_damage_severity": "no_damage"}),
         ]
     )
-    runtime.run = lambda fn: (runtime.ensure_loaded(), next(outputs))[1]  # type: ignore[method-assign]
+    runtime.run = lambda fn, **_: (runtime.ensure_loaded(), next(outputs))[1]  # type: ignore[method-assign]
     router = VLMFailoverRouter(
         api_key="",
         local_mlx_model_path=fake_mlx_dir,
@@ -230,3 +232,34 @@ def test_mllama_cross_attention_kv_memo_matches_original_and_skips_reprojection(
     assert projections == 1  # image K/V projected once, reused for every decode step
     for ref, out in zip(reference, patched):
         assert mx.allclose(ref, out, atol=1e-5).item()
+
+
+def test_commander_question_preempts_a_running_corridor_grade(fake_mlx_dir: Path) -> None:
+    runtime = ResidentMLXRuntime(fake_mlx_dir, loader=lambda path: (object(), object(), {}))
+    grading = threading.Event()
+    outcome: dict[str, object] = {}
+
+    def slow_grade(*_):
+        grading.set()
+        for _ in range(300):  # ~30 s "generation", polled per token
+            if runtime.preempt_requested:
+                raise LocalModelPreempted("yielded")
+            time.sleep(0.1)
+        return "graded"
+
+    def run_grade() -> None:
+        try:
+            outcome["grade"] = runtime.run(slow_grade, preemptible=True)
+        except LocalModelPreempted:
+            outcome["grade"] = "preempted"
+
+    worker = threading.Thread(target=run_grade)
+    worker.start()
+    assert grading.wait(5)
+    t0 = time.perf_counter()
+    assert runtime.run(lambda *_: "agent step") == "agent step"
+    assert time.perf_counter() - t0 < 1.0
+    worker.join(5)
+    assert outcome["grade"] == "preempted"
+    # A later grade runs normally once no question is waiting.
+    assert runtime.run(lambda *_: "graded", preemptible=True) == "graded"

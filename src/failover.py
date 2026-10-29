@@ -445,12 +445,20 @@ def local_final_answer(text: str) -> str:
     return text.rsplit("to=user<|message|>", 1)[-1]
 
 
+class LocalModelPreempted(RuntimeError):
+    """A preemptible on-device generation (corridor grading) yielded to a commander question."""
+
+
 class ResidentMLXRuntime:
     """
     Keeps the 4-bit Muse Glimmer weights resident in unified memory between Tier 2
     calls, so an uplink loss mid-demo costs one generation (seconds) instead of an 18 GB
     reload per request. MLX is not thread-safe, so loads and generations are serialized.
     `unload()` releases the weights explicitly when memory is needed elsewhere.
+
+    Corridor grades run as preemptible jobs (~85 s on Muse Glimmer): any new request stops a
+    running grade at its next token, and a grade never starts while a commander question is
+    waiting, so the agent is never stuck behind a queue of road clicks.
     """
 
     def __init__(
@@ -463,6 +471,9 @@ class ResidentMLXRuntime:
         self._loader = loader or self._default_loader
         self.uses_default_loader = loader is None
         self._lock = threading.Lock()
+        self._preempt = threading.Event()
+        self._running_preemptible = False
+        self._priority_waiting = 0
         self._bundle: tuple[Any, Any, dict[str, Any]] | None = None
         self.load_seconds: float | None = None
         self.load_count = 0
@@ -491,11 +502,33 @@ class ResidentMLXRuntime:
                 self.load_count += 1
             return self._bundle
 
-    def run(self, fn: Callable[[Any, Any, dict[str, Any]], str]) -> str:
-        """Run `fn(model, processor, config)` with the resident weights, loading them on first use."""
-        model, processor, config = self.ensure_loaded()
-        with self._lock:
-            return fn(model, processor, config)
+    @property
+    def preempt_requested(self) -> bool:
+        return self._preempt.is_set()
+
+    def run(self, fn: Callable[[Any, Any, dict[str, Any]], str], *, preemptible: bool = False) -> str:
+        """
+        Run `fn(model, processor, config)` with the resident weights, loading them on first use.
+        A preemptible `fn` must poll `preempt_requested` and raise `LocalModelPreempted`.
+        """
+        if self._running_preemptible:
+            self._preempt.set()
+        if not preemptible:
+            self._priority_waiting += 1
+        try:
+            model, processor, config = self.ensure_loaded()
+            with self._lock:
+                if preemptible and self._priority_waiting:
+                    raise LocalModelPreempted("a commander question is waiting for the on-device model")
+                self._preempt.clear()
+                self._running_preemptible = preemptible
+                try:
+                    return fn(model, processor, config)
+                finally:
+                    self._running_preemptible = False
+        finally:
+            if not preemptible:
+                self._priority_waiting -= 1
 
     def unload(self) -> None:
         with self._lock:
@@ -842,8 +875,10 @@ class VLMFailoverRouter:
                         temp_img_path = Path(tf.name)
                     images_arg = [str(temp_img_path)]
 
+                runtime = self.mlx_runtime
+
                 def _generate(mlx_model: Any, mlx_processor: Any, config: dict[str, Any]) -> str:
-                    from mlx_vlm import generate
+                    from mlx_vlm import stream_generate
 
                     formatted_prompt = format_local_prompt(
                         mlx_processor,
@@ -851,20 +886,26 @@ class VLMFailoverRouter:
                         prompt,
                         num_images=len(images_arg) if images_arg else 0,
                     )
-                    gen_res = generate(
+                    tokenizer = getattr(mlx_processor, "tokenizer", mlx_processor)
+                    tokenizer.stopping_criteria.reset(mlx_model.config.eos_token_id)
+                    text = ""
+                    # Streamed (rather than `generate`) so a commander question can stop it per token.
+                    for chunk in stream_generate(
                         mlx_model,
                         mlx_processor,
                         formatted_prompt,
                         image=images_arg,
                         max_tokens=LOCAL_MAX_TOKENS,
                         temp=0.0,
-                        verbose=False,
-                    )
-                    return local_final_answer(gen_res.text if hasattr(gen_res, "text") else str(gen_res))
+                    ):
+                        if runtime is not None and runtime.preempt_requested:
+                            raise LocalModelPreempted("corridor grade yielded to a commander question")
+                        text += chunk.text
+                    return local_final_answer(text)
 
-                if self.mlx_runtime is not None:
+                if runtime is not None:
                     # Resident weights stay loaded; only transient caches are released below.
-                    raw_output = self.mlx_runtime.run(_generate)
+                    raw_output = runtime.run(_generate, preemptible=True)
                 else:
                     from mlx_vlm import load
                     from mlx_vlm.utils import load_config
