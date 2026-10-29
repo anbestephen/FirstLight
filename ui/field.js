@@ -108,7 +108,8 @@
       opacity: 0.75,
     }).addTo(state.map);
     state.map.setMaxBounds(bounds.pad(0.25));
-    state.map.fitBounds(bounds);
+    // Not animated: an animated overview zoom would finish after, and undo, the first route fit.
+    state.map.fitBounds(bounds, { animate: false });
     state.roadFeatures = (data.roads && data.roads.features) || [];
   }
 
