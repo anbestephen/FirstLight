@@ -134,3 +134,13 @@ def test_unreachable_route_says_whether_the_best_clearance_opens_it(tools: Agent
     assert result["reachable"] is False
     best = result["highest_impact_clearance_for_this_vehicle"]
     assert isinstance(best["opens_this_route"], bool)
+
+
+def test_clearance_path_opens_a_route_to_the_worst_hit_block(tools: AgentTools) -> None:
+    plan = tools.plan_clearance_path("ambulance", "hotspot-1")
+    assert plan["reachable_now"] is False
+    assert plan["clearance_opens_route"] is True
+    assert plan["segment_count"] == len(plan["segments_to_clear"]) > 0
+    measured = [s["debris_m2"] for s in plan["segments_to_clear"] if s["debris_measured"]]
+    assert plan["measured_debris_m2"] == pytest.approx(sum(measured), abs=len(measured))
+    assert plan["route_after_clearance"]["distance_km"] > 0

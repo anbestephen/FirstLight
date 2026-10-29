@@ -1080,3 +1080,73 @@ def simulate_choke_point_clearance(
                 edata["debris_area_m2"] = 0.0
 
     return annotate_graph_with_geometry_metrics(G)
+
+
+# A blocked segment where SAM 3.1 saw neither pavement nor debris (sand, canopy, shadow) has no
+# measured clearing cost. The planner charges it as this much debris so measured piles are
+# preferred, and reports such segments separately rather than inventing a debris figure.
+UNMEASURED_SEGMENT_COST_M2 = 50.0
+
+
+def plan_least_debris_clearance(
+    graph: nx.MultiDiGraph,
+    origin: int | str,
+    destination: int | str,
+    vehicle_class: str | VehicleClass,
+) -> dict[str, Any] | None:
+    """
+    Cheapest set of blocked segments to clear so `vehicle_class` can reach `destination`.
+
+    Least-cost path where passable segments cost almost nothing (length only breaks ties) and a
+    clearable blocked segment costs its SAM-measured debris area in m². Segments under standing
+    water, footways closed to the vehicle, and roads too narrow even when clear are excluded.
+    The plan is then checked by clearing those segments and re-running the normal router.
+    Returns None when no clearable path exists.
+    """
+    vc = normalize_vehicle_class(vehicle_class)
+    G = annotate_graph_with_geometry_metrics(graph)
+    H = nx.DiGraph()
+    H.add_nodes_from(G.nodes)
+    for u, v, k, d in G.edges(keys=True, data=True):
+        tie_break = float(d["length_m"]) / 1000.0
+        if d[f"passable_{vc}"]:
+            cost = tie_break
+        elif (
+            d["has_water_obstruction"]
+            or (is_pedestrian_only(d.get("highway")) and vc not in FOOT_ONLY_EXEMPT_VEHICLES)
+            or float(d["nominal_width_m"]) < VEHICLE_MIN_WIDTH_M[vc]
+        ):
+            continue
+        else:
+            debris = float(d["debris_area_m2"])
+            cost = (debris if debris > 0 else UNMEASURED_SEGMENT_COST_M2) + tie_break
+        if not H.has_edge(u, v) or H[u][v]["cost"] > cost:
+            H.add_edge(u, v, cost=cost, key=k)
+
+    try:
+        path = nx.shortest_path(H, origin, destination, weight="cost")
+    except nx.NetworkXNoPath:
+        return None
+
+    segments: list[dict[str, Any]] = []
+    cleared = graph
+    for u, v in zip(path, path[1:]):
+        k = H[u][v]["key"]
+        d = G[u][v][k]
+        if d[f"passable_{vc}"]:
+            continue
+        segments.append(
+            {
+                "edge": (u, v, k),
+                "name": _format_edge_name(d.get("name"), u, v, d.get("display_name")),
+                "debris_m2": float(d["debris_area_m2"]),
+                "debris_measured": float(d["debris_area_m2"]) > 0,
+                "clear_width_now_m": float(d["min_clear_width_m"]),
+                "clear_width_after_m": float(d["nominal_width_m"]),
+                "needs_drone_recon": bool(d.get("needs_drone_recon")),
+            }
+        )
+        cleared = simulate_choke_point_clearance(cleared, u, v, k)
+
+    route = compute_shortest_route(cleared, origin=origin, destination=destination, vehicle_class=vc)
+    return {"segments": segments, "route_after": route}

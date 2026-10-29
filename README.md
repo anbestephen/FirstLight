@@ -19,7 +19,7 @@ Damage maps (xView2, Microsoft and others) show *what* is destroyed. After a hur
 | **SAM 3.1 as a measuring instrument** | Segments visible pavement, debris and standing water on the post-storm aerial image, then measures the **clear road width in metres every 5 m** along all 158 roads. |
 | **Vehicle-specific routing** | ATV needs > 1.2 m, ambulance > 2.2 m, fire engine > 3.5 m; standing water closes a road for everyone; ambulances and fire engines stay off footways. |
 | **Building damage from before/after imagery** | Muse Spark grades all 334 buildings from a 2017 (before) / 2018 (after) image pair. |
-| **What to clear first** | Ranks debris piles by severely damaged buildings unlocked per m² cleared. |
+| **What to clear first** | Ranks debris piles by severely damaged buildings unlocked per m² cleared. For a block no vehicle can reach, finds the set of segments with the least total debris whose clearance opens a route, and says which need drone recon first. |
 | **Commander agent with verified answers** | Ask in plain language. Muse Spark calls deterministic tools, and **every number in its answer is checked against the tool results**. |
 | **Three-tier failover** | Meta Cloud (Muse Spark) → Muse Glimmer 30B on the laptop (MLX, 4-bit) → no-model geometry and routing. The map never goes dark. |
 | **Live field phones over local Wi-Fi** | Phones follow the commander's dispatch in real time and detect internet loss within about 5 s. |
@@ -58,7 +58,7 @@ flowchart LR
     subgraph Laptop["Command laptop (FastAPI, local Wi-Fi)"]
         MEAS --> GRAPH["Vehicle-specific road graph<br/>OSM + measured widths"]
         SPARK --> GRAPH
-        GRAPH --> TOOLS["Deterministic tools<br/>route · measure · rank · dispatch"]
+        GRAPH --> TOOLS["Deterministic tools<br/>route · measure · rank · clearance path · dispatch"]
         TOOLS <--> AGENT["Commander agent<br/>Muse Spark → Muse Glimmer (MLX) → rules"]
         AGENT --> VERIFY["Number verifier"]
         GRAPH --> SSE["Dispatch hub (SSE)"]
@@ -76,7 +76,14 @@ flowchart LR
 
 **Routing and clearance** ([`src/routing.py`](src/routing.py)). Edge weights are length / speed (ATV 8.0, ambulance 13.5, fire engine 11.2 m/s) on passable edges and ∞ otherwise. The clearance queue simulates removing each debris pile and counts the severely damaged buildings that become reachable from the command post at US‑98 & 28th Street.
 
-**Commander agent** ([`src/agent.py`](src/agent.py), [`src/agent_tools.py`](src/agent_tools.py)). Six tools: `measure_road`, `damage_hotspots`, `plan_route`, `rank_clearance`, `reachability_summary`, `dispatch_field_unit`. They only read the measured graph and the graded buildings. After the model answers:
+No single pile opens any of the five worst-hit blocks, so the **clearance path** solves a least-cost path instead:
+- **Cost model:** passable segments cost almost nothing, and a blocked segment costs its measured debris in m².
+- **Excluded:** water, footways for vehicles, and roads too narrow even when clear.
+- **Unmeasured segments:** where SAM saw neither pavement nor debris, the segment is charged a fixed penalty and reported as unmeasured, never given an invented area.
+- **Check:** the plan is verified by clearing those segments and re-running the router.
+- **Example:** an ambulance to the worst-hit block needs 3 segments cleared (36 m² measured, 1 unmeasured, all 3 flagged for drone recon) for a 1.3 km route.
+
+**Commander agent** ([`src/agent.py`](src/agent.py), [`src/agent_tools.py`](src/agent_tools.py)). Seven tools: `measure_road`, `damage_hotspots`, `plan_route`, `plan_clearance_path`, `rank_clearance`, `reachability_summary`, `dispatch_field_unit`. They only read the measured graph and the graded buildings. After the model answers:
 - every number in the answer is matched against the tool results;
 - untraceable numbers get one rewrite, then are shown in red;
 - dispatch refuses destinations with no passable route.
@@ -197,7 +204,8 @@ The hackathon kicked off Oct 26, 2026 at 12:00 PM ET; the building period runs O
   - the commander agent with verified answers (`c7402dc`);
   - offline full-resolution tiles (`e29bd14`), and fixes (see `git log`);
   - Muse Glimmer 30B replacing Llama 3.2 Vision as the offline tier after a held-out comparison (Oct 28);
-  - push-to-talk questions through Muse Voice Transcribe, replacing a preset-command placeholder (Oct 29).
+  - push-to-talk questions through Muse Voice Transcribe, replacing a preset-command placeholder (Oct 29);
+  - least-debris clearance paths to blocks no vehicle can reach (Oct 29).
 
 ---
 

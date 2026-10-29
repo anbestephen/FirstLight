@@ -1402,6 +1402,12 @@
         ? `${r.vehicle} → ${r.destination}: ${r.distance_km} km · ${r.eta_min} min`
         : `${r.vehicle} → ${r.destination}: no passable route`;
     }
+    if (name === "plan_clearance_path") {
+      if (r.reachable_now) return `${r.vehicle} → ${r.destination}: already reachable`;
+      if (!r.clearance_opens_route) return `no clearance opens ${r.destination}`;
+      const recon = r.segments_needing_drone_recon ? ` · ${r.segments_needing_drone_recon} need drone recon` : "";
+      return `clear ${r.segment_count} segments (${r.measured_debris_m2} m² measured) → ${r.route_after_clearance.distance_km} km · ${r.route_after_clearance.eta_min} min${recon}`;
+    }
     if (name === "rank_clearance") {
       const c = (r.choke_points || [])[0];
       return c ? `#1 ${c.road}: ${c.debris_m2} m² debris → +${c.high_severity_buildings_unlocked} severe buildings` : "no clearance helps";

@@ -25,6 +25,7 @@ from src.routing import (
     compute_shortest_route,
     find_nearest_node,
     normalize_vehicle_class,
+    plan_least_debris_clearance,
     rank_choke_point_clearance_roi,
     simulate_choke_point_clearance,
 )
@@ -240,7 +241,63 @@ class AgentTools:
                     cleared, origin=self._origin(cleared), destination=dest_node, vehicle_class=vc
                 ).reachable
             result["highest_impact_clearance_for_this_vehicle"] = best
+            result["next_step"] = "call plan_clearance_path with this vehicle_class and destination"
         return result
+
+    def plan_clearance_path(self, vehicle_class: str, destination: str) -> dict[str, Any]:
+        """Fewest m² of debris to clear so a vehicle can reach a destination it cannot reach now."""
+        vc = normalize_vehicle_class(vehicle_class)
+        G = self.ctx.graph()
+        dest_node, label = self._resolve_destination(destination)
+        origin = self._origin(G)
+        result: dict[str, Any] = {"vehicle": VEHICLE_LABEL[vc], "destination": label}
+        if compute_shortest_route(G, origin=origin, destination=dest_node, vehicle_class=vc).reachable:
+            return {**result, "reachable_now": True, "segments_to_clear": []}
+        plan = plan_least_debris_clearance(G, origin, dest_node, vc)
+        if plan is None:
+            return {
+                **result,
+                "reachable_now": False,
+                "clearance_opens_route": False,
+                "reason": "every way in is under standing water, a footway, or too narrow even when clear",
+            }
+        segs = plan["segments"]
+        route = plan["route_after"]
+        out = {
+            **result,
+            "reachable_now": False,
+            "clearance_opens_route": route.reachable,
+            "segments_to_clear": [
+                {
+                    "road": s["name"],
+                    "debris_m2": round(s["debris_m2"]) if s["debris_measured"] else None,
+                    "debris_measured": s["debris_measured"],
+                    "clear_width_now_m": round(s["clear_width_now_m"], 1),
+                    "clear_width_after_m": round(s["clear_width_after_m"], 1),
+                    "needs_drone_recon": s["needs_drone_recon"],
+                }
+                for s in segs
+            ],
+            "segment_count": len(segs),
+            "measured_debris_m2": round(sum(s["debris_m2"] for s in segs if s["debris_measured"])),
+            "segments_without_debris_measurement": sum(not s["debris_measured"] for s in segs),
+            "segments_needing_drone_recon": sum(s["needs_drone_recon"] for s in segs),
+        }
+        if route.reachable:
+            after = {
+                "distance_km": round(route.total_distance_m / 1000.0, 1),
+                "eta_min": round(route.estimated_transit_time_s / 60.0, 1),
+            }
+            out["route_after_clearance"] = after
+            unmeasured = out["segments_without_debris_measurement"]
+            recon = out["segments_needing_drone_recon"]
+            out["summary"] = (
+                f"Clear {len(segs)} segments ({out['measured_debris_m2']} m² of measured debris"
+                + (f"; {unmeasured} of the {len(segs)} {'has' if unmeasured == 1 else 'have'} no debris measurement" if unmeasured else "")
+                + f") to open a {after['distance_km']} km route, about {after['eta_min']} min."
+                + (f" {recon} of the {len(segs)} {'needs' if recon == 1 else 'need'} drone recon first." if recon else "")
+            )
+        return out
 
     def rank_clearance(self, vehicle_class: str, limit: int = 3) -> dict[str, Any]:
         """Debris piles whose clearance reaches the most damaged buildings per m² cleared."""
@@ -336,6 +393,7 @@ TOOL_FUNCS: dict[str, Callable[..., dict[str, Any]]] = {
     "damage_hotspots": AgentTools.damage_hotspots,
     "plan_route": AgentTools.plan_route,
     "rank_clearance": AgentTools.rank_clearance,
+    "plan_clearance_path": AgentTools.plan_clearance_path,
     "reachability_summary": AgentTools.reachability_summary,
     "dispatch_field_unit": AgentTools.dispatch_field_unit,
 }
@@ -356,7 +414,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "damage_hotspots",
-            "description": "Blocks with the most severely damaged buildings (Muse Spark grades) and which vehicles can reach them.",
+            "description": "Blocks with the most severely damaged buildings (Muse Spark grades) and which vehicles can reach them. Use a hotspot's id (e.g. 'hotspot-1') as the destination for routing tools.",
             "parameters": {"type": "object", "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 10}}},
         },
     },
@@ -365,6 +423,18 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "plan_route",
             "description": "Fastest passable route from the command post for a vehicle class; if blocked, says which other vehicles can get through and the highest-impact debris clearance for this vehicle (which may not be on this route).",
+            "parameters": {
+                "type": "object",
+                "properties": {"vehicle_class": _VEHICLE_ARG, "destination": _DEST_ARG},
+                "required": ["vehicle_class", "destination"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "plan_clearance_path",
+            "description": "When a vehicle cannot reach a destination: the debris segments to clear (least total m²) that open a route, with the route length and time after clearance and which segments need drone recon first.",
             "parameters": {
                 "type": "object",
                 "properties": {"vehicle_class": _VEHICLE_ARG, "destination": _DEST_ARG},

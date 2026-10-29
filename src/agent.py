@@ -35,12 +35,14 @@ SYSTEM_PROMPT = (
     "Florida, the day after Hurricane Michael. Road widths come from SAM 3.1 measurements of aerial "
     "imagery; building damage comes from Muse Spark grades. Rules:\n"
     "1. Always call tools to get facts. Never guess widths, distances, times or counts.\n"
-    "2. Every number you write must appear in a tool result. Use the provided units "
-    "(distance_km, eta_min, metres) instead of converting.\n"
+    "2. Every number you write must appear in a tool result. Write distances as km from distance_km "
+    "and times as minutes from eta_min (e.g. \"1.3 km, about 1.9 min\"); never convert units.\n"
     "3. Vehicles need a clear width over 1.2 m (ATV), 2.2 m (ambulance) or 3.5 m (fire engine).\n"
     "4. If a route is blocked, say which vehicle can get through and which debris pile to clear.\n"
-    "5. highest_impact_clearance_for_this_vehicle is the best clearance anywhere for that vehicle; "
-    "never claim it opens the route that was asked about.\n"
+    "5. If a vehicle cannot reach a destination, call plan_clearance_path for it and relay its summary "
+    "(segments and m² to clear, the route after clearance, how many need drone recon first). "
+    "highest_impact_clearance_for_this_vehicle is the best clearance anywhere; it opens the route only "
+    "if opens_this_route is true.\n"
     "6. Refer to roads by name and to hotspots by their nearby road (\"the worst-hit block near 16th "
     "Street\"); never mention edge ids or node ids. Write areas as m².\n"
     "7. Only dispatch a field unit when the commander asks to send, dispatch or get a vehicle somewhere.\n"
@@ -306,15 +308,26 @@ class CommanderAgent:
                     text += f" Dispatched to {results[-1]['field_devices_notified']} field device(s)."
             else:
                 alt = [v for v, ok in r.get("other_vehicles_reachable", {}).items() if ok]
-                best = r.get("highest_impact_clearance_for_this_vehicle")
                 text = f"{r['vehicle']} cannot reach {r['destination']}."
                 if alt:
                     text += f" {', '.join(alt)} can get through."
-                if best:
+                async for ev in self._call_tool(
+                    "plan_clearance_path", {"vehicle_class": vc, "destination": destination}, results
+                ):
+                    yield ev
+                p = results[-1]
+                if p.get("clearance_opens_route"):
+                    unmeasured = p["segments_without_debris_measurement"]
                     text += (
-                        f" Highest-impact clearance for this vehicle: {best['debris_m2']} m² on {best['road']}, "
-                        f"unlocking {best['high_severity_buildings_unlocked']} severely damaged buildings."
+                        f" Clearing {p['segment_count']} segments ({p['measured_debris_m2']} m² of measured debris"
+                        + (f", {unmeasured} not measured" if unmeasured else "")
+                        + f") opens a {p['route_after_clearance']['distance_km']} km route, about "
+                        f"{p['route_after_clearance']['eta_min']} min."
                     )
+                    if p["segments_needing_drone_recon"]:
+                        text += f" {p['segments_needing_drone_recon']} of them need drone recon first."
+                elif "reason" in p:
+                    text += f" No clearance opens it: {p['reason']}."
         yield {
             "type": "answer",
             "text": text,

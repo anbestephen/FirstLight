@@ -20,6 +20,7 @@ from src.routing import (
     compute_shortest_route,
     is_edge_passable_for_vehicle,
     load_annotated_routing_graph,
+    plan_least_debris_clearance,
     rank_choke_point_clearance_roi,
     simulate_choke_point_clearance,
 )
@@ -373,3 +374,40 @@ def test_unnamed_segments_get_names_from_connected_streets() -> None:
     assert G[5][6][0]["display_name"] == "unnamed road"
     assert _format_edge_name(None, 2, 3, G[2][3][0]["display_name"]).startswith("unnamed road between")
     assert _format_edge_name("26th Street", 1, 2) == "26th Street"
+
+
+def test_clearance_plan_picks_least_debris_among_clearable_ways_in() -> None:
+    """Origin 1 -> target 4; every way in is blocked for an ambulance (needs 2.2 m)."""
+    G = nx.MultiDiGraph()
+    coords = {1: (-85.42, 29.94), 2: (-85.415, 29.941), 3: (-85.415, 29.943), 4: (-85.41, 29.94),
+              5: (-85.415, 29.946), 6: (-85.415, 29.948)}
+    for nid, (lon, lat) in coords.items():
+        G.add_node(nid, x=lon, y=lat)
+
+    def road(u, v, name, width, debris, **extra):
+        attrs = {"water_overlap_ratio": 0.0, "nominal_width_m": 7.0, **extra}
+        G.add_edge(u, v, key=0, name=name, length_m=100.0, min_clear_width_m=width, debris_area_sqm=debris,
+                   geometry=LineString([coords[u], coords[v]]), **attrs)
+
+    road(1, 2, "Debris Rd", 0.0, 40.0)          # clearable, 40 m²
+    road(2, 4, "Debris Rd", 7.0, 0.0)
+    road(1, 3, "Flooded Rd", 0.0, 10.0, water_overlap_ratio=0.2)   # water cannot be cleared
+    road(3, 4, "Flooded Rd", 7.0, 0.0)
+    road(1, 5, "Beach Path", 0.0, 5.0, highway="footway")          # ambulances stay off footways
+    road(5, 4, "Beach Path", 7.0, 0.0)
+    road(1, 6, "Narrow Lane", 0.0, 15.0)                           # too narrow even when clear
+    G[1][6][0]["nominal_width_m"] = 1.8
+    road(6, 4, "Narrow Lane", 7.0, 0.0)
+
+    plan = plan_least_debris_clearance(G, 1, 4, "ambulance")
+    assert [s["name"] for s in plan["segments"]] == ["Debris Rd"]
+    assert plan["segments"][0]["debris_m2"] == 40.0
+    assert plan["route_after"].reachable
+
+    # An ATV may use the footway, where only 5 m² blocks it.
+    atv = plan_least_debris_clearance(G, 1, 4, "atv")
+    assert [s["name"] for s in atv["segments"]] == ["Beach Path"]
+
+    # With the only clearable road gone, no plan exists.
+    G.remove_edge(1, 2)
+    assert plan_least_debris_clearance(G, 1, 4, "ambulance") is None
