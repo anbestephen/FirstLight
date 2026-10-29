@@ -1475,9 +1475,16 @@
     refreshClearanceRoi();
   }
 
+  // Only the latest question owns the panel: a new ask (e.g. a suggestion chip clicked while the
+  // agent is still working) cancels the previous stream, whose late events are then ignored.
+  let agentRun = null;
+
   async function askAgent(question) {
     const q = String(question || "").trim();
     if (q.length < 3) return;
+    if (agentRun) agentRun.abort();
+    const run = new AbortController();
+    agentRun = run;
     const panel = document.getElementById("agent-panel");
     const stepsEl = document.getElementById("agent-steps");
     const answerEl = document.getElementById("agent-answer");
@@ -1494,6 +1501,7 @@
     const pending = {};
 
     function onEvent(ev) {
+      if (agentRun !== run) return;
       if (ev.type === "tier") {
         tierEl.textContent = AGENT_TIER_LABELS[ev.tier] || ev.tier;
         tierEl.classList.toggle("edge", ev.tier !== "tier_1_cloud");
@@ -1537,6 +1545,7 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: q, force_offline: Boolean(state.forceOffline) }),
+        signal: run.signal,
       });
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -1553,10 +1562,13 @@
         }
       }
     } catch (err) {
-      answerEl.textContent = `Agent unavailable: ${err.message}`;
+      if (agentRun === run) answerEl.textContent = `Agent unavailable: ${err.message}`;
     } finally {
-      askBtn.disabled = false;
-      refreshMetaModelsTelemetry();
+      if (agentRun === run) {
+        agentRun = null;
+        askBtn.disabled = false;
+        refreshMetaModelsTelemetry();
+      }
     }
   }
 
