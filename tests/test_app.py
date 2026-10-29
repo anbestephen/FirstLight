@@ -300,10 +300,10 @@ def test_zero_cdn_static_asset_integrity_and_milestone5_controls() -> None:
         assert len(asset_res.content) > 100
 
 
-def test_milestone6_meta_models_briefing_voice_and_schematic_endpoints() -> None:
+def test_milestone6_meta_models_briefing_and_schematic_endpoints() -> None:
     """
     Verify Milestone 6 endpoints (`GET /api/meta-models`, `POST /api/incident-briefing`,
-    `POST /api/voice-dispatch`, and `GET /api/choke-point/{edge_id}/recon-schematic.png`)
+    and `GET /api/choke-point/{edge_id}/recon-schematic.png`)
     in both normal (`force_offline=False`) and Comms Blackout (`force_offline=True`) modes.
     """
     # 1. GET /api/meta-models
@@ -344,25 +344,7 @@ def test_milestone6_meta_models_briefing_voice_and_schematic_endpoints() -> None
             assert "[DETERMINISTIC GEOMETRIC TRIAGE — NO LLM EXECUTED]" in b_data["executive_summary"]
         assert b_data["memory_cleared"] is True
 
-    # 3. POST /api/voice-dispatch (muse-voice-transcribe-1.0)
-    for offline_flag in (False, True):
-        v_res = client.post(
-            "/api/voice-dispatch",
-            json={
-                "voice_command_text": "Dispatch Fire Engine and simulate clearing top choke point on 15th Street",
-                "force_offline": offline_flag,
-                "auto_apply_clearance": False,
-            },
-        )
-        assert v_res.status_code == 200
-        v_data = v_res.json()
-        assert v_data["model_id"] == "muse-voice-transcribe-1.0"
-        assert v_data["force_offline"] is offline_flag
-        assert v_data["vehicle_class"] == "fire_engine"
-        assert v_data["simulate_clear_edge_id"] is not None
-        assert v_data["trigger_route"] is True
-
-    # 4. GET /api/choke-point/{edge_id}/recon-schematic.png (muse-image-1.0)
+    # 3. GET /api/choke-point/{edge_id}/recon-schematic.png (muse-image-1.0)
     roi_res = client.get("/api/clearance-roi?vehicle_class=fire_engine")
     top_rec = roi_res.json()["recommendations"][0]
     edge_id = f"{top_rec['edge_u']}-{top_rec['edge_v']}-{top_rec['edge_key']}"

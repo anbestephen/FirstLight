@@ -16,7 +16,7 @@ from pathlib import Path
 import threading
 from typing import Any, AsyncIterator, Literal
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -68,6 +68,7 @@ from src.routing import (
     simulate_choke_point_clearance,
 )
 from src.sam_measure import build_caliper_geojson_from_measurement
+from src.voice import VOICE_MODEL, relay_transcription
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
@@ -147,15 +148,6 @@ class IncidentBriefingRequest(BaseModel):
     vehicle_class: str = "fire_engine"
     force_offline: bool = False
     max_corridors: int = Field(default=5, ge=1, le=20)
-
-
-class VoiceDispatchRequest(BaseModel):
-    """Request payload for `POST /api/voice-dispatch` (`muse-voice-transcribe`)."""
-
-    voice_command_text: str | None = None
-    audio_base64: str | None = None
-    force_offline: bool = False
-    auto_apply_clearance: bool = False
 
 
 class BenchmarkTiersRequest(BaseModel):
@@ -1270,52 +1262,36 @@ async def post_incident_briefing(req: IncidentBriefingRequest) -> dict[str, Any]
     return result.model_dump()
 
 
-@app.post("/api/voice-dispatch")
-async def post_voice_dispatch(req: VoiceDispatchRequest) -> dict[str, Any]:
+@app.websocket("/api/voice/stream")
+async def voice_stream(ws: WebSocket) -> None:
     """
-    Invoke `muse-voice-transcribe` tactical hands-free radio dispatch to transcribe
-    and parse spoken or preset field radio commands into structured UI routing actions.
+    Push-to-talk: relay live microphone PCM to Muse Voice Transcribe and stream the words
+    back; the dashboard then asks the final transcript to the commander agent.
     """
-    state.ensure_loaded()
-    assert state.active_graph is not None
-
-    recs = rank_choke_point_clearance_roi(
-        state.active_graph,
-        vehicle_class="fire_engine",
-        buildings_source=BUILDINGS_GRADED_GEOJSON_PATH if BUILDINGS_GRADED_GEOJSON_PATH.exists() else BUILDINGS_GEOJSON_PATH,
-        max_recommendations=5,
-    )
-    top_edge_id: str | None = None
-    top_road_name = "US Highway 98"
-    if recs:
-        top = recs[0]
-        top_edge_id = f"{top.edge_u}-{top.edge_v}-{top.edge_key}"
-        top_road_name = top.road_name
-    else:
-        edges = list(state.active_graph.edges(keys=True, data=True))
-        if edges:
-            u0, v0, k0, d0 = edges[0]
-            top_edge_id = f"{u0}-{v0}-{int(k0)}"
-            top_road_name = str(d0.get("name", "US Highway 98"))
-
-    result = await state.meta_suite.transcribe_and_parse_voice_dispatch(
-        voice_command_text=req.voice_command_text,
-        audio_base64=req.audio_base64,
-        top_edge_id=top_edge_id,
-        top_road_name=top_road_name,
-        force_offline=req.force_offline,
-    )
-
-    if req.auto_apply_clearance and result.simulate_clear_edge_id:
-        u, v, k, edata = state.resolve_edge_by_id(result.simulate_clear_edge_id)
-        if not state.is_edge_currently_cleared(u, v, k):
-            state.toggle_clear_edge(u, v, k)
-            state.dispatch.bump(
-                "debris_cleared",
-                _field_road_label(_format_edge_name(edata.get("name"), u, v, edata.get("display_name"))),
-            )
-
-    return result.model_dump()
+    await ws.accept()
+    if not state.router.api_key:
+        await ws.send_json({"type": "error", "message": "No Meta API key configured. Type the question instead."})
+        await ws.close()
+        return
+    if state.dispatch.uplink_online is False:
+        await ws.send_json(
+            {"type": "error", "message": "Internet is down and Muse Voice runs in Meta Cloud. Type the question instead."}
+        )
+        await ws.close()
+        return
+    try:
+        summary = await relay_transcription(ws, state.router.api_key)
+        state.meta_suite.record_model_invocation(
+            VOICE_MODEL, float(summary["finalize_ms"] or 0), ConnectivityTier.TIER_1_CLOUD.value
+        )
+        reply = {"type": "done", **summary}
+    except Exception as exc:
+        reply = {"type": "error", "message": f"Muse Voice unavailable ({type(exc).__name__}). Type the question instead."}
+    try:
+        await ws.send_json(reply)
+        await ws.close()
+    except Exception:
+        pass  # the dashboard already went away
 
 
 @app.post("/api/assess")

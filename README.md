@@ -39,8 +39,9 @@ Damage maps (xView2, Microsoft and others) show *what* is destroyed. After a hur
 | **SAM 3.1** (`Sam3Model`, fp16) | Locally on Apple Silicon (PyTorch MPS) | Text-prompted segmentation (`road`, `debris`, `standing water`) on 89 road tiles; the probability maps drive the 5 m width measurements. Baked once (~5 min on an M1 Max), so the field laptop needs no GPU work at demo time. |
 | **Muse Spark 1.3** (`muse-spark-1.3`) | Meta Model API | (1) Grades each building from a before/after image pair (xBD scale). (2) Plans the commander agent's tool calls with native function calling and writes the answer. (3) Grades a selected road corridor from its aerial crop. |
 | **Muse Glimmer 30B, 4-bit** (open weights) | Locally on Apple Silicon (MLX) | Offline fallback for grading and for the agent (same tools via a JSON action protocol). Kept resident in memory. Grades with low reasoning; agent steps skip reasoning, since every number is verified against tool output anyway. Chosen over Llama 3.2 11B Vision on the held-out test set ([comparison](#offline-model-choice)). |
+| **Muse Voice Transcribe 1.0** (`muse-voice-transcribe-1.0`) | Meta Model API (realtime WebSocket) | Push-to-talk questions to the commander agent. The dashboard streams microphone audio through the laptop (the API key never reaches the browser), and the words appear as they are recognised. The final transcript arrives about 0.25 s after release. It needs the internet; when the link is down the dashboard says to type instead. |
 
-Experimental integrations (in the UI, not part of the core demo): **Muse Wonder 1.0** incident briefing, **Muse Image 1.0** recon schematic, and a voice-dispatch button that currently parses a preset command (no microphone capture yet). Each labels its output with the model or fallback that produced it.
+Experimental integrations (in the UI, not part of the core demo): **Muse Wonder 1.0** incident briefing and **Muse Image 1.0** recon schematic. Each labels its output with the model or fallback that produced it.
 
 ---
 
@@ -195,7 +196,8 @@ The hackathon kicked off Oct 26, 2026 at 12:00 PM ET; the building period runs O
   - per-building Muse Spark grading from before/after imagery (`302c3f9`, `bdb80f6`);
   - the commander agent with verified answers (`c7402dc`);
   - offline full-resolution tiles (`e29bd14`), and fixes (see `git log`);
-  - Muse Glimmer 30B replacing Llama 3.2 Vision as the offline tier after a held-out comparison (Oct 28).
+  - Muse Glimmer 30B replacing Llama 3.2 Vision as the offline tier after a held-out comparison (Oct 28);
+  - push-to-talk questions through Muse Voice Transcribe, replacing a preset-command placeholder (Oct 29).
 
 ---
 
@@ -212,6 +214,7 @@ src/
   failover.py       3-tier grading (Muse Spark → MLX Muse Glimmer → geometry), resident MLX runtime
   mlx_patches.py    mlx-vlm cross-attention K/V memo (Llama 3.2 Vision, used in the model comparison)
   dispatch.py       Live dispatch hub (SSE) and internet-loss probe
+  voice.py          Push-to-talk relay to Muse Voice Transcribe (realtime ASR)
   labeling.py       Blind labelling API
 ui/                 Commander dashboard, field phone view, labelling page (Leaflet vendored)
 scripts/            Data fetch, SAM bake, Muse Spark grading, tiles, benchmark samples
@@ -229,7 +232,7 @@ docs/img/           Screenshots
 - **Muse Glimmer 30B:** the offline tier uses `mlx-community/Muse-Glimmer-30B-4bit` (Apache 2.0).
 - **Built with Llama.** The offline-model comparison also runs `mlx-community/Llama-3.2-11B-Vision-Instruct-4bit`, licensed under the Llama 3.2 Community License, Copyright © Meta Platforms, Inc. All Rights Reserved.
 - **SAM 3.1:** Meta Platforms, Inc., under the SAM License (weights in `models/sam3.1`, transformers `Sam3Model` format).
-- **Meta Model API** (`muse-spark-1.3`, `muse-wonder-1.0`, `muse-image-1.0`): used under the Meta Global AI Developer Hackathon terms.
+- **Meta Model API** (`muse-spark-1.3`, `muse-voice-transcribe-1.0`, `muse-wonder-1.0`, `muse-image-1.0`): used under the Meta Global AI Developer Hackathon terms.
 - **Map data © OpenStreetMap contributors,** available under the Open Database License (ODbL).
 - **NOAA National Geodetic Survey:** Hurricane Michael emergency response imagery (Oct 11, 2018). U.S. Government work, public domain.
 - **USDA NAIP 2017 imagery,** via Microsoft Planetary Computer. Public domain.

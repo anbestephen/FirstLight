@@ -1181,23 +1181,6 @@ class IncidentBriefingResult(BaseModel):
     memory_cleared: bool = True
 
 
-class VoiceDispatchResult(BaseModel):
-    """Structured output from `muse-voice-transcribe-1.0` tactical hands-free radio dispatch."""
-
-    model_id: str = "muse-voice-transcribe-1.0"
-    tier_used: ConnectivityTier
-    fallback_chain: list[str] = Field(default_factory=list)
-    force_offline: bool = False
-    transcript: str
-    vehicle_class: str
-    simulate_clear_edge_id: str | None = None
-    inspect_edge_id: str | None = None
-    trigger_route: bool = True
-    action_summary: str
-    latency_ms: float = 0.0
-    memory_cleared: bool = True
-
-
 class MetaModelSuite:
     """
     Unified orchestrator for the full 6-model Meta AI Disaster Response Suite:
@@ -1259,7 +1242,7 @@ class MetaModelSuite:
                 "last_tier": ConnectivityTier.TIER_3_DETERMINISTIC.value,
             },
             "muse-voice-transcribe-1.0": {
-                "role": "Tactical Hands-Free Radio Dispatch Transcription",
+                "role": "Push-to-Talk Commander Questions (realtime speech-to-text)",
                 "call_count": 0,
                 "last_latency_ms": 0.0,
                 "last_tier": ConnectivityTier.TIER_3_DETERMINISTIC.value,
@@ -1489,123 +1472,6 @@ class MetaModelSuite:
             total_structures_unlockable=total_structures,
             total_debris_to_clear_sqm=round(total_debris, 2),
             gsd_m_per_px=round(gsd_m_per_px, 4),
-            latency_ms=round(latency_ms, 3),
-            memory_cleared=bool(mem_info.get("cleared", True)),
-        )
-
-    async def transcribe_and_parse_voice_dispatch(
-        self,
-        *,
-        voice_command_text: str | None = None,
-        audio_base64: str | None = None,
-        top_edge_id: str | None = None,
-        top_road_name: str = "US Highway 98",
-        force_offline: bool = False,
-        async_client: httpx.AsyncClient | None = None,
-    ) -> VoiceDispatchResult:
-        """
-        Invoke `muse-voice-transcribe-1.0` (`https://api.meta.ai/v1/chat/completions`) to
-        transcribe field radio commands and parse them into structured routing & clearance actions.
-        """
-        t0 = time.perf_counter()
-        fallback_chain: list[str] = []
-        tier_used = ConnectivityTier.TIER_3_DETERMINISTIC
-
-        default_transcript = (
-            voice_command_text.strip()
-            if voice_command_text and voice_command_text.strip()
-            else f"Dispatch Fire Engine and simulate clearing top choke point on {top_road_name}"
-        )
-        transcript: str | None = None
-
-        if force_offline:
-            fallback_chain.append("tier_1_cloud_muse_voice:bypassed:force_offline")
-        elif self.router.api_key:
-            try:
-                payload = {
-                    "model": "muse-voice-transcribe-1.0",
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": (
-                                "Transcribe and normalize this tactical field radio dispatch command: "
-                                f"'{default_transcript}'"
-                            ),
-                        }
-                    ],
-                    "temperature": 0.0,
-                    "max_tokens": DEFAULT_CLOUD_MAX_TOKENS,
-                }
-                headers = {
-                    "Authorization": f"Bearer {self.router.api_key}",
-                    "Content-Type": "application/json",
-                }
-                endpoint = f"{self.router.api_base_url}/chat/completions"
-                timeout = httpx.Timeout(self.router.cloud_timeout_s)
-                if async_client is not None:
-                    resp = await async_client.post(endpoint, json=payload, headers=headers, timeout=timeout)
-                else:
-                    async with httpx.AsyncClient(timeout=timeout) as client:
-                        resp = await client.post(endpoint, json=payload, headers=headers)
-                resp.raise_for_status()
-                raw_voice = resp.json()["choices"][0]["message"].get("content")
-                if not raw_voice or not str(raw_voice).strip():
-                    raise ValueError("Empty message.content from muse-voice-transcribe-1.0")
-                transcript = str(raw_voice).strip()
-                tier_used = ConnectivityTier.TIER_1_CLOUD
-                fallback_chain.append("tier_1_cloud_muse_voice:success")
-            except Exception as exc:
-                fallback_chain.append(_format_cloud_exception("tier_1_cloud_muse_voice", exc))
-        else:
-            fallback_chain.append("tier_1_cloud_muse_voice:error:MissingApiKey")
-
-        if transcript is None:
-            transcript = default_transcript
-            tier_used = ConnectivityTier.TIER_3_DETERMINISTIC
-            fallback_chain.append("tier_3_deterministic_voice_parser")
-
-        lower_text = transcript.lower()
-        if "atv" in lower_text or "foot" in lower_text:
-            parsed_vc = "atv"
-        elif "ambulance" in lower_text or "pickup" in lower_text or "ems" in lower_text:
-            parsed_vc = "ambulance"
-        else:
-            parsed_vc = "fire_engine"
-
-        should_clear = any(
-            kw in lower_text for kw in ("clear", "bulldoze", "open", "unblock", "simulate")
-        )
-        clear_edge = top_edge_id if should_clear else None
-
-        mem_info = release_unified_memory()
-        latency_ms = (time.perf_counter() - t0) * 1000.0
-        self.record_model_invocation("muse-voice-transcribe-1.0", latency_ms, tier_used.value)
-
-        provenance_prefix = (
-            "[MUSE-VOICE-1.0 CLOUD ASR]"
-            if tier_used == ConnectivityTier.TIER_1_CLOUD
-            else "[DETERMINISTIC REGEX DISPATCH — NO ASR MODEL EXECUTED]"
-        )
-        action_summary = (
-            f"{provenance_prefix} Switched active vehicle to {parsed_vc.upper()}"
-            + (
-                f", simulated debris clearance on choke point {clear_edge} ({top_road_name}), and recomputed shortest route."
-                if clear_edge
-                else " and recomputed shortest passable route."
-            )
-        )
-
-        return VoiceDispatchResult(
-            model_id="muse-voice-transcribe-1.0",
-            tier_used=tier_used,
-            fallback_chain=fallback_chain,
-            force_offline=force_offline,
-            transcript=transcript,
-            vehicle_class=parsed_vc,
-            simulate_clear_edge_id=clear_edge,
-            inspect_edge_id=top_edge_id,
-            trigger_route=True,
-            action_summary=action_summary,
             latency_ms=round(latency_ms, 3),
             memory_cleared=bool(mem_info.get("cleared", True)),
         )

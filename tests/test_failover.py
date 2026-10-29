@@ -384,21 +384,8 @@ async def test_meta_model_suite_wonder_voice_and_image_failover() -> None:
     assert "[DETERMINISTIC GEOMETRIC TRIAGE — NO LLM EXECUTED]" in briefing_offline.executive_summary
     assert "[MUSE-WONDER STRATEGIC PLAN]" not in briefing_offline.executive_summary
 
-    # 3. Test muse-voice-transcribe-1.0 in force_offline=True mode
-    voice_offline = await suite.transcribe_and_parse_voice_dispatch(
-        voice_command_text="Dispatch Ambulance and clear top choke point on 15th Street",
-        top_edge_id="10-20-0",
-        top_road_name="15th Street",
-        force_offline=True,
-    )
-    assert voice_offline.model_id == "muse-voice-transcribe-1.0"
-    assert voice_offline.tier_used == ConnectivityTier.TIER_3_DETERMINISTIC
-    assert "tier_3_deterministic_voice_parser" in voice_offline.fallback_chain
-    assert "[DETERMINISTIC REGEX DISPATCH — NO ASR MODEL EXECUTED]" in voice_offline.action_summary
-    assert voice_offline.vehicle_class == "ambulance"
-    assert voice_offline.simulate_clear_edge_id == "10-20-0"
 
-    # 4. Test muse-image-1.0 tactical schematic PNG generation in offline mode
+    # 3. Test muse-image-1.0 tactical schematic PNG generation in offline mode
     img = Image.new("RGB", (256, 256), color=(40, 60, 80))
     buf = io.BytesIO()
     img.save(buf, format="PNG")

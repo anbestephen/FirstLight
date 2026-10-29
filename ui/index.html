@@ -77,7 +77,7 @@
         <strong>Muse Wonder 1.0</strong> <em class="chip-sub">Cmd Advisor</em>
       </span>
       <span class="meta-model-chip active" data-model="muse-voice-transcribe-1.0" id="chip-muse-voice">
-        <strong>Muse Voice 1.0</strong> <em class="chip-sub">Radio PTT</em>
+        <strong>Muse Voice 1.0</strong> <em class="chip-sub">Push-to-talk</em>
       </span>
       <span class="meta-model-chip active" data-model="muse-image-1.0" id="chip-muse-image">
         <strong>Muse Image 1.0</strong> <em class="chip-sub">Recon Overlay</em>
@@ -85,12 +85,6 @@
       <span class="meta-model-chip active" data-model="open-weight-mlx-4bit" id="chip-edge-mlx">
         <strong>Edge MLX</strong> <em class="chip-sub">Muse-Glimmer-30B-4bit</em>
       </span>
-    </div>
-    <div class="voice-radio-controls">
-      <button type="button" class="action-btn btn-voice-ptt" id="btn-voice-dispatch" title="Trigger Muse Voice Tactical Radio Dispatch">
-        &#x1F399; Push-to-Talk: Muse Voice Dispatch
-      </button>
-      <span class="voice-transcript-pill" id="voice-dispatch-status">Radio Standby (Hands-Free Ready)</span>
     </div>
   </section>
 
@@ -116,7 +110,10 @@
       <span class="demo-bar-label">ASK FIRSTLIGHT:</span>
       <input type="text" id="agent-input" class="agent-input" maxlength="500"
              placeholder="e.g. Get an ambulance to the worst-hit block" aria-label="Ask the commander agent" />
+      <button type="button" class="action-btn agent-mic-btn" id="agent-mic-btn" aria-pressed="false"
+              title="Push to talk: speak your question (Muse Voice Transcribe)">&#x1F399; Talk</button>
       <button type="submit" class="action-btn agent-ask-btn" id="agent-ask-btn">Ask</button>
+      <span class="agent-voice-status" id="agent-voice-status" aria-live="polite"></span>
     </form>
     <div class="agent-suggestions">
       <button type="button" class="agent-chip" data-q="Get an ambulance to the worst-hit block">Ambulance to worst-hit block</button>

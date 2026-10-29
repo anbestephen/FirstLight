@@ -1274,44 +1274,6 @@
     await refreshMetaModelsTelemetry();
   }
 
-  async function runVoiceDispatch() {
-    const statusEl = document.getElementById("voice-dispatch-status");
-    if (statusEl) {
-      statusEl.textContent = "Transcribing Tactical Radio via Muse Voice...";
-    }
-
-    const res = await fetch("/api/voice-dispatch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        voice_command_text:
-          "Dispatch Fire Engine and simulate clearing top choke point on US Highway 98",
-        force_offline: Boolean(state.forceOffline),
-        auto_apply_clearance: true,
-      }),
-    });
-    const data = await res.json();
-
-    if (statusEl) {
-      statusEl.textContent = `"${data.transcript}" (${data.latency_ms}ms)`;
-      statusEl.title = data.action_summary || data.transcript;
-    }
-
-    if (data.vehicle_class) {
-      state.vehicleClass = data.vehicle_class;
-      document.querySelectorAll(".vehicle-btn").forEach(function (b) {
-        b.classList.toggle("active", b.getAttribute("data-vehicle") === state.vehicleClass);
-      });
-    }
-
-    await loadInitialLayers();
-    await Promise.all([refreshRoute(), refreshClearanceRoi()]);
-    if (data.inspect_edge_id) {
-      await inspectCorridorByEdgeId(data.inspect_edge_id, true);
-    }
-    await refreshMetaModelsTelemetry();
-  }
-
   async function runBenchmarkTiers(edgeId) {
     const targetEdge = String(edgeId || state.activeEdgeId || "0");
     const boxEl = document.getElementById("benchmark-tiers-box");
@@ -1572,6 +1534,123 @@
     }
   }
 
+  // ---- Push-to-talk: microphone -> /api/voice/stream -> Muse Voice Transcribe -> agent ----
+  // Captures mono PCM16 at 24 kHz (the rate Muse Voice expects), streams it live, shows the
+  // words as they are recognised, and asks the final transcript like a typed question.
+  const VOICE_WORKLET = `
+    class PcmTap extends AudioWorkletProcessor {
+      process(inputs) {
+        const ch = inputs[0] && inputs[0][0];
+        if (ch) this.port.postMessage(ch.slice(0));
+        return true;
+      }
+    }
+    registerProcessor("pcm-tap", PcmTap);`;
+  const VOICE_MAX_MS = 15000;
+  let voice = null;
+
+  function setVoiceStatus(text) {
+    document.getElementById("agent-voice-status").textContent = text;
+  }
+
+  function setMicListening(on) {
+    const btn = document.getElementById("agent-mic-btn");
+    btn.classList.toggle("listening", on);
+    btn.setAttribute("aria-pressed", String(on));
+    btn.innerHTML = on ? "&#x25A0; Stop" : "&#x1F399; Talk";
+  }
+
+  async function startVoice() {
+    if (state.forceOffline) {
+      setVoiceStatus("Voice needs Meta Cloud: type the question");
+      return;
+    }
+    const input = document.getElementById("agent-input");
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      });
+    } catch (err) {
+      setVoiceStatus(`Microphone unavailable: ${err.name}`);
+      return;
+    }
+    const ctx = new AudioContext({ sampleRate: 24000 });
+    const workletUrl = URL.createObjectURL(new Blob([VOICE_WORKLET], { type: "application/javascript" }));
+    await ctx.audioWorklet.addModule(workletUrl);
+    URL.revokeObjectURL(workletUrl);
+    const source = ctx.createMediaStreamSource(stream);
+    const tap = new AudioWorkletNode(ctx, "pcm-tap");
+    source.connect(tap);
+
+    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/voice/stream`);
+    ws.binaryType = "arraybuffer";
+    const session = { ws, ctx, stream, ready: false, queued: [], startedAt: performance.now(), releasedAt: null };
+    voice = session;
+
+    tap.port.onmessage = function (ev) {
+      const f32 = ev.data;
+      const pcm = new Int16Array(f32.length);
+      for (let i = 0; i < f32.length; i++) {
+        const s = Math.max(-1, Math.min(1, f32[i]));
+        pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
+      if (session.ready && ws.readyState === WebSocket.OPEN) ws.send(pcm.buffer);
+      else session.queued.push(pcm.buffer); // speech before the Meta handshake completes
+    };
+
+    ws.onmessage = function (ev) {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === "ready") {
+        session.ready = true;
+        session.queued.forEach((buf) => ws.send(buf));
+        session.queued = [];
+        setVoiceStatus("Listening… (Muse Voice)");
+      } else if (msg.type === "transcript") {
+        input.value = msg.text;
+      } else if (msg.type === "done") {
+        const after = session.releasedAt ? ((performance.now() - session.releasedAt) / 1000).toFixed(1) : "?";
+        setVoiceStatus(`Muse Voice · ${(msg.audio_ms / 1000).toFixed(1)} s audio · text ${after} s after release`);
+        if (msg.transcript && msg.transcript.length >= 3) {
+          input.value = msg.transcript;
+          askAgent(msg.transcript);
+        } else {
+          setVoiceStatus("Didn't catch that: try again or type");
+        }
+      } else if (msg.type === "error") {
+        setVoiceStatus(msg.message);
+      }
+    };
+    ws.onclose = function () {
+      if (voice === session) stopVoice();
+    };
+
+    input.value = "";
+    input.placeholder = "Listening…";
+    setVoiceStatus("Connecting to Muse Voice…");
+    setMicListening(true);
+    session.timer = setTimeout(stopVoice, VOICE_MAX_MS);
+  }
+
+  function stopVoice() {
+    const session = voice;
+    if (!session) return;
+    voice = null;
+    clearTimeout(session.timer);
+    session.releasedAt = performance.now();
+    session.stream.getTracks().forEach((t) => t.stop());
+    session.ctx.close();
+    const finish = function () {
+      session.queued.forEach((buf) => session.ws.send(buf));
+      session.queued = [];
+      session.ws.send(JSON.stringify({ type: "end" }));
+    };
+    if (session.ws.readyState === WebSocket.OPEN) finish();
+    else if (session.ws.readyState === WebSocket.CONNECTING) session.ws.onopen = finish;
+    document.getElementById("agent-input").placeholder = "e.g. Get an ambulance to the worst-hit block";
+    setMicListening(false);
+  }
+
   function bindAgentUi() {
     const form = document.getElementById("agent-form");
     const input = document.getElementById("agent-input");
@@ -1585,6 +1664,10 @@
         input.value = chip.getAttribute("data-q");
         askAgent(input.value);
       });
+    });
+    document.getElementById("agent-mic-btn").addEventListener("click", function () {
+      if (voice) stopVoice();
+      else startVoice();
     });
     document.getElementById("agent-close").addEventListener("click", function () {
       document.getElementById("agent-panel").classList.add("hidden");
@@ -1717,13 +1800,6 @@
     if (btnWonder) {
       btnWonder.addEventListener("click", function () {
         runWonderBriefing();
-      });
-    }
-
-    const btnVoice = document.getElementById("btn-voice-dispatch");
-    if (btnVoice) {
-      btnVoice.addEventListener("click", function () {
-        runVoiceDispatch();
       });
     }
 
