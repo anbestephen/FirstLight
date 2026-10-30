@@ -374,9 +374,10 @@
           state.schematicLabel || "Deterministic Caliper Overlay (Muse Image Offline)";
       }
     } else {
-      cropImg.src = `/api/choke-point/${encodedId}/crop.png`;
+      const drone = state.droneImagery && state.droneImagery.edgeId === state.activeEdgeId ? state.droneImagery : null;
+      cropImg.src = `/api/choke-point/${encodedId}/crop.png${drone ? "?source=drone" : ""}`;
       if (captionEl) {
-        captionEl.textContent = "NOAA post-storm aerial, Oct 11 2018";
+        captionEl.textContent = drone ? `CRASAR drone orthomosaic, ${drone.flown}` : "NOAA post-storm aerial, Oct 11 2018";
       }
     }
   }
@@ -505,6 +506,10 @@
     const row = document.getElementById("drone-row");
     const btn = document.getElementById("btn-drone-check");
     const label = document.getElementById("drone-source");
+    const wasDrone = Boolean(state.droneImagery && state.droneImagery.edgeId === state.activeEdgeId);
+    state.droneImagery =
+      props.measurement_source === "drone" && props.imagery ? { edgeId: state.activeEdgeId, flown: props.imagery.flown } : null;
+    if (wasDrone !== Boolean(state.droneImagery)) updateInspectorImage();
     if (props.measurement_source === "drone" && props.imagery) {
       row.classList.remove("hidden");
       btn.classList.add("hidden");
