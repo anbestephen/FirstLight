@@ -89,6 +89,21 @@ class StationMeasurement:
     confidence: float
     capped: bool = False
 
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "StationMeasurement":
+        seg = d.get("clear_segment_utm")
+        return cls(
+            station_m=float(d["station_m"]),
+            center_utm=tuple(d["center_utm"]),
+            ray_utm=tuple(tuple(p) for p in d["ray_utm"]),
+            clear_segment_utm=tuple(tuple(p) for p in seg) if seg else None,
+            clear_width_m=float(d["clear_width_m"]),
+            center_offset_m=d.get("center_offset_m"),
+            cause=d["cause"],
+            confidence=float(d["confidence"]),
+            capped=bool(d.get("capped", False)),
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "station_m": round(self.station_m, 2),
@@ -292,6 +307,7 @@ def measure_edge(
     half_width_m: float = RAY_HALF_WIDTH_M,
     step_m: float = RAY_SAMPLE_STEP_M,
     max_width_m: float | None = None,
+    sustained: bool = True,
 ) -> EdgeMeasurement:
     """Measure a UTM road centerline against SAM 3.1 probability maps."""
     stations: list[StationMeasurement] = []
@@ -308,7 +324,27 @@ def measure_edge(
         debris_area += float((probs["debris"][near] >= 0.5).sum()) * step_m * interval_m
         water_area += float((probs["water"][near] >= 0.5).sum()) * step_m * interval_m
 
-    min_w, pinch_i = _sustained_min(stations)
+    return summarise_stations(stations, float(line.length), debris_area, water_area, sustained=sustained)
+
+
+def summarise_stations(
+    stations: list[StationMeasurement],
+    length_m: float,
+    debris_area: float,
+    water_area: float,
+    *,
+    sustained: bool = True,
+) -> EdgeMeasurement:
+    """
+    One verdict per road from its stations. `sustained=True` needs an obstruction to persist
+    over two stations (noise suppression for the 0.28 m NOAA image); `sustained=False` takes the
+    narrowest single cross-section, used on sharper drone imagery where one cut is reliable.
+    """
+    if sustained:
+        min_w, pinch_i = _sustained_min(stations)
+    else:
+        pinch_i = min(range(len(stations)), key=lambda i: stations[i].clear_width_m)
+        min_w = stations[pinch_i].clear_width_m
     causes = [st.cause for st in stations]
     water_run = len(stations) == 1 and causes[0] == "water"
     for i in range(len(causes) - 1):
@@ -325,7 +361,7 @@ def measure_edge(
     pinch_is_not_visible = stations[pinch_i].cause == "not_visible" if stations else False
 
     return EdgeMeasurement(
-        length_m=float(line.length),
+        length_m=length_m,
         min_clear_width_m=0.0 if water_run else min_w,
         pinch_station_m=stations[pinch_i].station_m if stations else 0.0,
         has_water_obstruction=water_run,

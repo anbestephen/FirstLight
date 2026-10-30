@@ -7,7 +7,7 @@ Writes `data/sam31_drone_measurements.json` (both edge directions, same record f
 bake plus `measurement_source` and `imagery`) and caches each patch in `data/drone_cache/` for the
 inspector's aerial view. The dashboard applies these on demand ("Drone check").
 
-Usage: ./.venv/bin/python scripts/drone_remeasure.py [--limit N] [--edge U-V-K ...]
+Usage: ./.venv/bin/python scripts/drone_remeasure.py [--limit N] [--edge U-V-K ...] [--rederive]
 Needs the internet the first time (patches are read from Hugging Face over HTTP).
 """
 
@@ -29,7 +29,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from bake_sam31_masks import edge_lines_utm  # noqa: E402
-from src.drone import GDAL_ENV, MIN_COVERAGE, SCENES, coverage, read_patch, remeasure, segment_patch  # noqa: E402
+from src.drone import GDAL_ENV, MIN_COVERAGE, SCENES, coverage, read_patch, rederive, remeasure, segment_patch  # noqa: E402
 from src.geometry import TARGET_METRIC_CRS, SAM31GeometricInstrument  # noqa: E402
 
 DATA = PROJECT_ROOT / "data"
@@ -61,7 +61,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--edge", action="append", default=[], help="only these edge ids (u-v-k)")
+    parser.add_argument("--rederive", action="store_true", help="recompute verdicts from stored cross-sections only")
     args = parser.parse_args()
+    if args.rederive:
+        out = json.loads(OUT_PATH.read_text())
+        out["edges"] = {eid: rederive(rec) for eid, rec in out["edges"].items()}
+        OUT_PATH.write_text(json.dumps(out, indent=1) + "\n", encoding="utf-8")
+        print(f"re-derived {len(out['edges'])} records", flush=True)
+        return
 
     noaa = json.loads((DATA / "sam31_edge_measurements.json").read_text())["edges"]
     G = ox.load_graphml(DATA / "osm_road_graph.graphml")

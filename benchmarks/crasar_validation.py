@@ -105,8 +105,16 @@ def as_labels(matches: dict[str, str]) -> dict[str, dict[str, str]]:
     return {f"crasar-{bid}": {"building_id": bid, "grade": grade} for bid, grade in matches.items()}
 
 
-def road_validation(paths: list[Path]) -> dict:
-    measurements = json.loads((PROJECT_ROOT / "data" / "sam31_edge_measurements.json").read_text())["edges"]
+def load_measurements(with_drone: bool = False) -> dict:
+    """NOAA SAM 3.1 records, optionally with every available drone re-measurement applied."""
+    edges = json.loads((PROJECT_ROOT / "data" / "sam31_edge_measurements.json").read_text())["edges"]
+    drone_path = PROJECT_ROOT / "data" / "sam31_drone_measurements.json"
+    if with_drone and drone_path.exists():
+        edges = {**edges, **json.loads(drone_path.read_text())["edges"]}
+    return edges
+
+
+def road_validation(paths: list[Path], measurements: dict) -> dict:
     roads = gpd.read_file(PROJECT_ROOT / "data" / "osm_roads.geojson").to_crs(UTM)
     roads["edge_id"] = roads["u"].astype(str) + "-" + roads["v"].astype(str) + "-" + roads["key"].astype(str)
 
@@ -185,10 +193,12 @@ def main() -> None:
                 as_labels({b: g for b, g in drone.items() if b in hand}), hand, "FirstLight hand labels (NOAA)"
             ),
         },
-        "roads": road_validation(paths["uas_roads"]),
+        "roads": road_validation(paths["uas_roads"], load_measurements()),
+        "roads_after_drone_checks": road_validation(paths["uas_roads"], load_measurements(with_drone=True)),
     }
     RESULTS_PATH.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
     summary = {k: v for k, v in results["roads"].items() if k != "rows"}
+    drone_summary = {k: v for k, v in results["roads_after_drone_checks"].items() if k != "rows"}
     b = results["buildings"]
     print(json.dumps({"matched": b["matched_to_crasar_drone_labels"],
                       "spark_vs_drone": {k: b["muse_spark_vs_crasar_drone"].get(k) for k in
@@ -199,7 +209,7 @@ def main() -> None:
                                                 "high_severity_precision", "high_severity_recall")},
                       "hand_vs_drone": {k: b["hand_labels_vs_crasar_drone"].get(k) for k in
                                         ("labeled", "four_class_accuracy", "within_one_grade")},
-                      "roads": summary}, indent=1))
+                      "roads": summary, "roads_after_drone_checks": drone_summary}, indent=1))
 
 
 if __name__ == "__main__":

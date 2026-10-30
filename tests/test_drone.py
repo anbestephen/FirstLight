@@ -107,3 +107,19 @@ def test_drone_check_explains_roads_without_drone_imagery() -> None:
         assert res.status_code == 404 and "outside drone coverage" in res.json()["detail"]
     finally:
         state.drone_measurements = saved
+
+
+def test_drone_rule_closes_a_road_on_one_narrow_cross_section() -> None:
+    from src.sam_measure import StationMeasurement, summarise_stations
+
+    def station(i: int, width: float) -> StationMeasurement:
+        return StationMeasurement(
+            station_m=5.0 * i, center_utm=(5.0 * i, 0.0), ray_utm=((5.0 * i, -15.0), (5.0 * i, 15.0)),
+            clear_segment_utm=None, clear_width_m=width, center_offset_m=0.0,
+            cause="debris" if width < 1 else "clear", confidence=0.9,
+        )
+
+    stations = [station(i, w) for i, w in enumerate([5.0, 5.0, 0.4, 5.0, 5.0])]
+    assert summarise_stations(stations, 20.0, 0.0, 0.0).min_clear_width_m == 5.0  # NOAA: needs two stations
+    strict = summarise_stations(stations, 20.0, 0.0, 0.0, sustained=False)
+    assert strict.min_clear_width_m == 0.4 and strict.pinch_station_m == 10.0

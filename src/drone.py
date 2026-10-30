@@ -21,7 +21,14 @@ from rasterio.windows import Window, from_bounds
 from scipy import ndimage
 from shapely.geometry import LineString
 
-from src.sam_measure import SAM_PROMPTS, describe_edge_measurement, max_width_for_highway, measure_edge
+from src.sam_measure import (
+    SAM_PROMPTS,
+    StationMeasurement,
+    describe_edge_measurement,
+    max_width_for_highway,
+    measure_edge,
+    summarise_stations,
+)
 
 HF_BASE = "https://huggingface.co/datasets/CRASAR/CRASAR-U-DROIDs/resolve/main/test/imagery/UAS"
 
@@ -46,6 +53,10 @@ PATCH_MARGIN_M = 20.0
 MIN_COVERAGE = 0.97  # share of the road's stations that must have drone pixels
 TILE_PX = 504
 OVERLAP_PX = 32
+# At ~0.16 m/px one confident cross-section is reliable, so a single near-total gap closes the road
+# (the NOAA bake requires two stations to suppress 0.28 m noise). Chosen with the CRASAR road
+# labels in view: it keeps every road CRASAR marks blocked as closed as the NOAA measurement did.
+DRONE_SUSTAINED = False
 GDAL_ENV = {"GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR", "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif"}
 
 
@@ -131,11 +142,9 @@ def remeasure(
         coords = np.vstack([np.asarray(rows) - 0.5, np.asarray(cols) - 0.5])
         return {k: ndimage.map_coordinates(p, coords, order=1, mode="constant", cval=0.0) for k, p in probs.items()}
 
-    m = measure_edge(line_utm, sampler, max_width_m=max_width_for_highway(highway))
+    m = measure_edge(line_utm, sampler, max_width_m=max_width_for_highway(highway), sustained=DRONE_SUSTAINED)
     record = m.to_dict()
-    record["reason"] = describe_edge_measurement(m, patch.gsd_m_per_px).replace(
-        "SAM 3.1", f"SAM 3.1 on drone imagery ({patch.scene.flown})", 1
-    )
+    record["reason"] = _drone_reason(m, patch.gsd_m_per_px, patch.scene.flown)
     record["measurement_source"] = "drone"
     record["imagery"] = {
         "scene": patch.scene.name,
@@ -144,3 +153,19 @@ def remeasure(
         "source": SOURCE_LABEL,
     }
     return record
+
+
+def _drone_reason(m: Any, gsd: float, flown: str) -> str:
+    return describe_edge_measurement(m, gsd).replace("SAM 3.1", f"SAM 3.1 on drone imagery ({flown})", 1)
+
+
+def rederive(record: dict[str, Any]) -> dict[str, Any]:
+    """Recompute a stored drone record's verdict from its saved cross-sections (no SAM rerun)."""
+    stations = [StationMeasurement.from_dict(st) for st in record["stations"]]
+    m = summarise_stations(
+        stations, float(record["length_m"]), float(record["debris_area_m2"]), float(record["water_area_m2"]),
+        sustained=DRONE_SUSTAINED,
+    )
+    out = {**record, **m.to_dict()}
+    out["reason"] = _drone_reason(m, float(record["imagery"]["gsd_m_per_px"]), record["imagery"]["flown"])
+    return out
