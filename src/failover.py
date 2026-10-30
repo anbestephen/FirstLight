@@ -1,17 +1,14 @@
 """
-3-Tier VLM damage grading and connectivity circuit-breaker router (`src/failover.py`).
+Damage grading for one road corridor through three tiers (`src/failover.py`).
 
-Key Invariants (AGENTS.md & mlx-failover skill):
-1. Tier Structure:
-   - Tier 1 (Cloud Primary): Meta Model API (`https://api.meta.ai/v1/chat/completions`,
-     Muse Spark) using `MODEL_API_KEY` with an explicit 2.5s timeout.
-   - Tier 2 (Edge Fallback): Local quantized Apple Silicon inference via `mlx-vlm` using
-     `models/Muse-Glimmer-30B-4bit` with explicit unified memory release
-     between runs to prevent memory swapping.
-   - Tier 3 (Deterministic Fallback): Pure geometric damage and obstacle heuristics derived
-     from SAM 3.1 pixel-to-meter ratios, clear widths, and debris/water overlap ratios.
-2. No Hallucinated Counts/Metrics: Every rationale string embeds the exact measured
-   geometric metrics (`min_clear_width_m`, `debris_area_m2`, `gsd_m_per_px`, passability).
+1. Meta Cloud: Muse Spark 1.3 on the Meta Model API reads the aerial crop and the SAM 3.1
+   measurements and returns building and road severity as JSON.
+2. On the laptop: Muse Glimmer 30B (4-bit, MLX) answers the same prompt when the cloud is
+   unreachable, declines or times out. The weights stay resident and agent questions preempt it.
+3. No model: severities derived from the SAM 3.1 geometry alone.
+
+Whichever tier answers, the passability verdict and the rationale's numbers come from the
+measurements, never from the model. Every result records which tiers were tried and why.
 """
 
 from __future__ import annotations
@@ -44,20 +41,9 @@ from src.geometry import (
 )
 
 DamageSeverity = Literal["no_damage", "minor_damage", "major_damage", "destroyed"]
-
-VALID_DAMAGE_SEVERITIES: tuple[DamageSeverity, ...] = (
-    "no_damage",
-    "minor_damage",
-    "major_damage",
-    "destroyed",
-)
-
-SEVERITY_TO_SCORE: dict[DamageSeverity, int] = {
-    "no_damage": 0,
-    "minor_damage": 1,
-    "major_damage": 2,
-    "destroyed": 3,
-}
+# xBD order, mildest first; the index is the severity score.
+VALID_DAMAGE_SEVERITIES: tuple[DamageSeverity, ...] = ("no_damage", "minor_damage", "major_damage", "destroyed")
+SEVERITY_TO_SCORE: dict[DamageSeverity, int] = {s: i for i, s in enumerate(VALID_DAMAGE_SEVERITIES)}
 
 META_MODEL_API_BASE_URL = "https://api.meta.ai/v1"
 DEFAULT_CLOUD_MODEL = "muse-spark-1.3"
@@ -74,6 +60,8 @@ DEFAULT_CLOUD_MAX_TOKENS = 2048
 DEFAULT_CLOUD_REASONING_EFFORT: str | None = os.environ.get(
     "FIRSTLIGHT_SPARK_REASONING_EFFORT", "low"
 ) or None
+CLOUD_CUE_PREFIX = "[MUSE-SPARK-1.3 CLOUD VLM]"
+RULES_CUE_PREFIX = "[DETERMINISTIC SAM/GEOMETRY FALLBACK]"
 
 
 def _format_cloud_exception(prefix: str, exc: Exception) -> str:
@@ -88,7 +76,7 @@ def _format_cloud_exception(prefix: str, exc: Exception) -> str:
 
 
 class ConnectivityTier(str, Enum):
-    """Execution tiers in the FirstLight 3-tier connectivity circuit breaker."""
+    """Which tier produced a grade."""
 
     TIER_1_CLOUD = "tier_1_cloud_meta_api"
     TIER_2_MLX = "tier_2_edge_mlx_vlm"
@@ -96,7 +84,7 @@ class ConnectivityTier(str, Enum):
 
 
 class FailoverMode(str, Enum):
-    """Operating mode for the connectivity router (supports live demo overrides)."""
+    """Which tiers may run: all in order, or one pinned for the tier comparison view."""
 
     AUTO = "auto"
     FORCE_CLOUD = "force_cloud"
@@ -106,10 +94,7 @@ class FailoverMode(str, Enum):
 
 @dataclass
 class GeometricTelemetry:
-    """
-    Measured SAM 3.1 & raster geometric telemetry passed into the 3-tier router
-    so all damage grades and passability explanations remain grounded in real metrics.
-    """
+    """The SAM 3.1 measurements of one corridor that every tier grades against."""
 
     target_id: str = "segment-0"
     min_clear_width_m: float = 4.0
@@ -123,7 +108,7 @@ class GeometricTelemetry:
 
 
 class DamageAssessmentResult(BaseModel):
-    """Structured VLM / deterministic damage and road passability assessment."""
+    """One graded corridor: severities, measured passability, the explanation and provenance."""
 
     target_id: str
     building_damage_severity: DamageSeverity
@@ -145,87 +130,44 @@ class DamageAssessmentResult(BaseModel):
     cloud_cache_hit: bool = False
 
 
+# Words a model may use instead of the four labels, checked from most to least severe.
+_SEVERITY_SYNONYMS: tuple[tuple[DamageSeverity, tuple[str, ...]], ...] = (
+    ("destroyed", ("destroy", "collapse", "total", "catastrophic")),
+    ("major_damage", ("major", "severe", "heavy", "significant")),
+    ("minor_damage", ("minor", "light", "partial", "moderate", "medium")),
+    ("no_damage", ("no_damage", "none", "intact", "undamaged", "clear")),
+)
+
+
 def normalize_damage_severity(raw_value: Any, default: DamageSeverity = "minor_damage") -> DamageSeverity:
-    """
-    Normalize a string or integer severity label into the strict 4-class schema:
-      - "none"|"intact"|"undamaged" -> "no_damage"
-      - "minor"|"light"|"moderate"|"medium" -> "minor_damage"
-      - "major"|"severe"|"heavy"|"significant" -> "major_damage"
-      - "destroyed"|"collapsed"|"catastrophic"|"total" -> "destroyed"
-    """
+    """Map a label, a synonym ("severe", "intact") or a 0–3 score onto the four xBD grades."""
     if raw_value is None:
         return default
-    if isinstance(raw_value, int):
-        mapping: dict[int, DamageSeverity] = {
-            0: "no_damage",
-            1: "minor_damage",
-            2: "major_damage",
-            3: "destroyed",
-        }
-        return mapping.get(raw_value, default)
-
+    if isinstance(raw_value, int) and not isinstance(raw_value, bool):
+        return VALID_DAMAGE_SEVERITIES[raw_value] if 0 <= raw_value < 4 else default
     text = str(raw_value).strip().lower().replace("-", "_").replace(" ", "_")
     if text in VALID_DAMAGE_SEVERITIES:
         return text  # type: ignore[return-value]
-    if (
-        "destroy" in text
-        or "collapse" in text
-        or "total" in text
-        or "catastrophic" in text
-    ):
-        return "destroyed"
-    if (
-        "major" in text
-        or "severe" in text
-        or "heavy" in text
-        or "significant" in text
-    ):
-        return "major_damage"
-    if (
-        "minor" in text
-        or "light" in text
-        or "partial" in text
-        or "moderate" in text
-        or "medium" in text
-    ):
-        return "minor_damage"
-    if (
-        "no_damage" in text
-        or "none" in text
-        or "intact" in text
-        or "undamaged" in text
-        or "clear" in text
-    ):
-        return "no_damage"
+    for severity, words in _SEVERITY_SYNONYMS:
+        if any(w in text for w in words):
+            return severity
     return default
 
 
 def release_unified_memory() -> dict[str, Any]:
-    """
-    Explicitly release Apple Silicon MLX and PyTorch MPS unified memory caches
-    between local model runs to prevent memory pressure or swapping on 64 GB Unified Memory.
-    """
+    """Free cached MLX and PyTorch-MPS buffers after a local generation; reports MLX memory left."""
     gc.collect()
-    mlx_active_after = 0
-    mlx_cache_after = 0
-
+    active = cached = 0
     try:
         import mlx.core as mx
 
-        if hasattr(mx, "clear_cache"):
-            mx.clear_cache()
-        elif hasattr(mx, "metal") and hasattr(mx.metal, "clear_cache"):
-            mx.metal.clear_cache()
-
-        if hasattr(mx, "get_active_memory"):
-            mlx_active_after = int(mx.get_active_memory())
-            mlx_cache_after = int(mx.get_cache_memory())
-        elif hasattr(mx, "metal") and hasattr(mx.metal, "get_active_memory"):
-            mlx_active_after = int(mx.metal.get_active_memory())
-            mlx_cache_after = int(mx.metal.get_cache_memory())
+        api = mx if hasattr(mx, "clear_cache") else getattr(mx, "metal", None)
+        if api is not None:
+            api.clear_cache()
+            if hasattr(api, "get_active_memory"):
+                active, cached = int(api.get_active_memory()), int(api.get_cache_memory())
     except Exception:
         pass
-
     try:
         import torch
 
@@ -233,13 +175,8 @@ def release_unified_memory() -> dict[str, Any]:
             torch.mps.empty_cache()
     except Exception:
         pass
-
     gc.collect()
-    return {
-        "cleared": True,
-        "mlx_active_memory_bytes": mlx_active_after,
-        "mlx_cache_memory_bytes": mlx_cache_after,
-    }
+    return {"cleared": True, "mlx_active_memory_bytes": active, "mlx_cache_memory_bytes": cached}
 
 
 def _encode_image_to_base64(
@@ -270,101 +207,73 @@ def _encode_image_to_base64(
     return None
 
 
-def _build_grounding_rationale(
-    telemetry: GeometricTelemetry,
-    passability: PassabilityFlags,
-    building_severity: DamageSeverity,
-    road_severity: DamageSeverity,
-    visual_cue_summary: str,
+def _passability_sentence(t: GeometricTelemetry, flags: PassabilityFlags) -> str:
+    if t.has_water_obstruction or t.water_area_m2 > 0.0:
+        return (
+            f"IMPASSABLE for all vehicle classes (weight=inf) due to {t.water_area_m2:.2f} m² "
+            f"SAM 3.1 water mask overlap on {t.road_name}"
+        )
+    vehicles = (
+        (f"Fire Engine (>{FIRE_ENGINE_MIN_WIDTH_M:.1f}m)", flags.fire_engine),
+        (f"Ambulance (>{AMBULANCE_MIN_WIDTH_M:.1f}m)", flags.ambulance),
+        (f"ATV/Foot (>{ATV_MIN_WIDTH_M:.1f}m)", flags.atv),
+    )
+    passes = [name for name, ok in vehicles if ok]
+    blocked = [name for name, ok in vehicles if not ok]
+    if not blocked:
+        return f"Passable for all classes ({', '.join(passes)})"
+    if not passes:
+        return f"Blocked for all vehicle classes ({', '.join(blocked)})"
+    return f"Passable for {', '.join(passes)}; blocked for {', '.join(blocked)}"
+
+
+def _rationale(
+    t: GeometricTelemetry, flags: PassabilityFlags, building: DamageSeverity, road: DamageSeverity, cue: str
 ) -> str:
-    """
-    Construct a clear passability rationale string that mathematically combines
-    the measured SAM 3.1 geometric metrics (`min_clear_width_m`, `debris_area_m2`,
-    `gsd_m_per_px`) with the visual/structural damage grading.
-    """
-    if telemetry.has_water_obstruction or telemetry.water_area_m2 > 0.0:
-        pass_desc = (
-            f"IMPASSABLE for all vehicle classes (weight=inf) due to {telemetry.water_area_m2:.2f} m² "
-            f"SAM 3.1 water mask overlap on {telemetry.road_name}"
-        )
-    else:
-        allowed: list[str] = []
-        blocked: list[str] = []
-        if passability.fire_engine:
-            allowed.append(f"Fire Engine (>{FIRE_ENGINE_MIN_WIDTH_M:.1f}m)")
-        else:
-            blocked.append(f"Fire Engine (>{FIRE_ENGINE_MIN_WIDTH_M:.1f}m)")
-        if passability.ambulance:
-            allowed.append(f"Ambulance (>{AMBULANCE_MIN_WIDTH_M:.1f}m)")
-        else:
-            blocked.append(f"Ambulance (>{AMBULANCE_MIN_WIDTH_M:.1f}m)")
-        if passability.atv:
-            allowed.append(f"ATV/Foot (>{ATV_MIN_WIDTH_M:.1f}m)")
-        else:
-            blocked.append(f"ATV/Foot (>{ATV_MIN_WIDTH_M:.1f}m)")
-
-        if allowed and not blocked:
-            pass_desc = f"Passable for all classes ({', '.join(allowed)})"
-        elif allowed:
-            pass_desc = f"Passable for {', '.join(allowed)}; blocked for {', '.join(blocked)}"
-        else:
-            pass_desc = f"Blocked for all vehicle classes ({', '.join(blocked)})"
-
+    """The explanation shown to the commander: measured numbers first, then the model's grade."""
     return (
-        f"[{telemetry.road_name}] Measured min clear width {telemetry.min_clear_width_m:.2f}m "
-        f"at {telemetry.gsd_m_per_px:.4f} m/px GSD ({telemetry.debris_area_m2:.2f} m² debris). "
-        f"{pass_desc}. Structural grade: building={building_severity}, road={road_severity}. "
-        f"Cue: {visual_cue_summary}"
+        f"[{t.road_name}] Measured min clear width {t.min_clear_width_m:.2f}m "
+        f"at {t.gsd_m_per_px:.4f} m/px GSD ({t.debris_area_m2:.2f} m² debris). "
+        f"{_passability_sentence(t, flags)}. Structural grade: building={building}, road={road}. "
+        f"Cue: {cue}"
     )
 
 
-def evaluate_deterministic_tier3(
-    telemetry: GeometricTelemetry,
-) -> tuple[DamageSeverity, DamageSeverity, str]:
+def evaluate_deterministic_tier3(telemetry: GeometricTelemetry) -> tuple[DamageSeverity, DamageSeverity, str]:
     """
-    Tier 3 Deterministic Fallback: Compute building and road damage severity and visual
-    cue explanation strictly from geometric overlap ratios and clear width measurements.
+    Tier 3: grade from geometry alone. Buildings by how much debris or water covers them (or
+    debris area nearby); roads by which vehicle thresholds the clear width still meets.
     """
-    # 1. Building damage severity from debris/water footprint overlap ratio
-    b_ratio = max(
-        float(telemetry.building_debris_overlap_ratio),
-        float(telemetry.building_water_overlap_ratio),
-    )
-    if b_ratio >= 0.50 or (telemetry.has_water_obstruction and telemetry.debris_area_m2 >= 35.0):
-        building_severity: DamageSeverity = "destroyed"
-    elif b_ratio >= 0.20 or telemetry.debris_area_m2 >= 20.0:
-        building_severity = "major_damage"
-    elif b_ratio >= 0.05 or telemetry.debris_area_m2 > 0.0:
-        building_severity = "minor_damage"
+    t = telemetry
+    cover = max(t.building_debris_overlap_ratio, t.building_water_overlap_ratio)
+    building: DamageSeverity
+    if cover >= 0.50 or (t.has_water_obstruction and t.debris_area_m2 >= 35.0):
+        building = "destroyed"
+    elif cover >= 0.20 or t.debris_area_m2 >= 20.0:
+        building = "major_damage"
+    elif cover >= 0.05 or t.debris_area_m2 > 0.0:
+        building = "minor_damage"
     else:
-        building_severity = "no_damage"
+        building = "no_damage"
 
-    # 2. Road damage severity from water washout and measured clear width
-    if telemetry.has_water_obstruction or telemetry.min_clear_width_m <= ATV_MIN_WIDTH_M:
-        road_severity: DamageSeverity = "destroyed"
-    elif telemetry.min_clear_width_m <= AMBULANCE_MIN_WIDTH_M:
-        road_severity = "major_damage"
-    elif telemetry.min_clear_width_m <= FIRE_ENGINE_MIN_WIDTH_M or telemetry.debris_area_m2 > 0.0:
-        road_severity = "minor_damage"
+    width = t.min_clear_width_m
+    road: DamageSeverity
+    if t.has_water_obstruction or width <= ATV_MIN_WIDTH_M:
+        road = "destroyed"
+    elif width <= AMBULANCE_MIN_WIDTH_M:
+        road = "major_damage"
+    elif width <= FIRE_ENGINE_MIN_WIDTH_M or t.debris_area_m2 > 0.0:
+        road = "minor_damage"
     else:
-        road_severity = "no_damage"
+        road = "no_damage"
 
-    if telemetry.has_water_obstruction:
-        cue = (
-            f"[DETERMINISTIC SAM/GEOMETRY FALLBACK] Detected {telemetry.water_area_m2:.2f} m² standing water/washout "
-            f"and {telemetry.debris_area_m2:.2f} m² debris."
-        )
-    elif telemetry.debris_area_m2 > 0.0:
-        cue = (
-            f"[DETERMINISTIC SAM/GEOMETRY FALLBACK] Measured {telemetry.debris_area_m2:.2f} m² debris reducing "
-            f"corridor span to {telemetry.min_clear_width_m:.2f}m."
-        )
+    if t.has_water_obstruction:
+        detail = f"Detected {t.water_area_m2:.2f} m² standing water/washout and {t.debris_area_m2:.2f} m² debris."
+    elif t.debris_area_m2 > 0.0:
+        detail = f"Measured {t.debris_area_m2:.2f} m² debris reducing corridor span to {width:.2f}m."
     else:
-        cue = (
-            f"[DETERMINISTIC SAM/GEOMETRY FALLBACK] Confirmed unobstructed {telemetry.min_clear_width_m:.2f}m corridor."
-        )
-
-    return building_severity, road_severity, cue
+        detail = f"Confirmed unobstructed {width:.2f}m corridor."
+    return building, road, f"{RULES_CUE_PREFIX} {detail}"
 
 
 def parse_vlm_json_response(
@@ -374,52 +283,44 @@ def parse_vlm_json_response(
     tier_prefix: str | None = None,
 ) -> tuple[DamageSeverity, DamageSeverity, str]:
     """
-    Parse structured JSON or key-value text returned by Tier 1 (Meta API) or Tier 2 (MLX VLM)
-    into `(building_damage_severity, road_damage_severity, visual_cue_summary)`.
+    Read a model's grade. Prefers the JSON object in the reply; falls back to severity words in
+    prose. Any field the model leaves out takes the geometry-only (Tier 3) value.
     """
-    det_b, det_r, det_cue = evaluate_deterministic_tier3(telemetry)
-    if not raw_text or not str(raw_text).strip():
-        return det_b, det_r, det_cue
+    rules_building, rules_road, rules_cue = evaluate_deterministic_tier3(telemetry)
+    text = str(raw_text or "").strip()
+    if not text:
+        return rules_building, rules_road, rules_cue
 
-    cleaned = str(raw_text).strip()
-    # Extract JSON object if wrapped in markdown fences
-    start_idx = cleaned.find("{")
-    end_idx = cleaned.rfind("}")
-    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-        json_candidate = cleaned[start_idx : end_idx + 1]
+    parsed: dict[str, Any] | None = None
+    start, end = text.find("{"), text.rfind("}")
+    if 0 <= start < end:
         try:
-            parsed = json.loads(json_candidate)
-            b_sev = normalize_damage_severity(
-                parsed.get("building_damage_severity") or parsed.get("building_severity"),
-                default=det_b,
-            )
-            r_sev = normalize_damage_severity(
-                parsed.get("road_damage_severity") or parsed.get("road_severity"),
-                default=det_r,
-            )
-            raw_cue = str(
-                parsed.get("visual_cue_summary")
-                or parsed.get("passability_rationale")
-                or parsed.get("rationale")
-                or f"Assessed building={b_sev}, road={r_sev} on {telemetry.road_name}."
-            ).strip()
-            if tier_prefix and not raw_cue.startswith(tier_prefix):
-                cue = f"{tier_prefix} {raw_cue}"
-            else:
-                cue = raw_cue
-            return b_sev, r_sev, cue
+            candidate = json.loads(text[start : end + 1])
+            parsed = candidate if isinstance(candidate, dict) else None
         except json.JSONDecodeError:
-            pass
+            parsed = None
 
-    # Fallback text extraction if VLM responded in prose
-    b_sev = normalize_damage_severity(cleaned, default=det_b)
-    r_sev = normalize_damage_severity(cleaned, default=det_r)
-    raw_cue = cleaned.splitlines()[0][:240].strip()
-    if tier_prefix and not raw_cue.startswith(tier_prefix):
-        cue = f"{tier_prefix} {raw_cue}"
+    if parsed is not None:
+        building = normalize_damage_severity(
+            parsed.get("building_damage_severity") or parsed.get("building_severity"), default=rules_building
+        )
+        road = normalize_damage_severity(
+            parsed.get("road_damage_severity") or parsed.get("road_severity"), default=rules_road
+        )
+        cue = str(
+            parsed.get("visual_cue_summary")
+            or parsed.get("passability_rationale")
+            or parsed.get("rationale")
+            or f"Assessed building={building}, road={road} on {telemetry.road_name}."
+        ).strip()
     else:
-        cue = raw_cue
-    return b_sev, r_sev, cue
+        building = normalize_damage_severity(text, default=rules_building)
+        road = normalize_damage_severity(text, default=rules_road)
+        cue = text.splitlines()[0][:240].strip()
+
+    if tier_prefix and not cue.startswith(tier_prefix):
+        cue = f"{tier_prefix} {cue}"
+    return building, road, cue
 
 
 def format_local_prompt(
@@ -543,12 +444,26 @@ class ResidentMLXRuntime:
         }
 
 
+ImageSource = str | Path | Image.Image | np.ndarray | bytes | None
+
+
+@dataclass
+class _Attempt:
+    """Progress of one grading request through the tiers."""
+
+    chain: list[str]
+    grade: tuple[DamageSeverity, DamageSeverity, str] | None = None
+    tier: ConnectivityTier = ConnectivityTier.TIER_3_DETERMINISTIC
+    memory_cleared: bool = False
+    cloud_cache_hit: bool = False
+    cloud_cache_key: str | None = None  # set when Tier 1 should be called live
+
+
 class VLMFailoverRouter:
     """
-    3-Tier Connectivity & VLM Failover Circuit Breaker:
-      - Tier 1: Cloud Meta Model API (`https://api.meta.ai/v1/chat/completions`) with 2.5s timeout
-      - Tier 2: Local Apple Silicon `mlx-vlm` (`models/Muse-Glimmer-30B-4bit`)
-      - Tier 3: Deterministic Geometric Heuristics
+    Grades one road corridor: Muse Spark in the cloud, else Muse Glimmer on the laptop, else
+    rules. Tier 1 is skipped at once when the uplink probe reports the internet down, and real
+    answers from either model are cached so repeat views and pre-graded roads are instant.
     """
 
     def __init__(
@@ -566,56 +481,74 @@ class VLMFailoverRouter:
         mlx_runtime: ResidentMLXRuntime | None = None,
         uplink_online_hint: Callable[[], bool | None] | None = None,
     ) -> None:
-        if api_key is not None:
-            self.api_key = api_key
-        else:
-            env_key = os.environ.get("MODEL_API_KEY", "")
-            if not env_key and "PYTEST_CURRENT_TEST" not in os.environ:
-                try:
-                    from dotenv import load_dotenv
-
-                    load_dotenv()
-                    env_key = os.environ.get("MODEL_API_KEY", "")
-                except Exception:
-                    pass
-            self.api_key = env_key
+        self.api_key = api_key if api_key is not None else self._key_from_environment()
         self.api_base_url = api_base_url.rstrip("/")
         self.cloud_model = cloud_model
         self.cloud_timeout_s = float(cloud_timeout_s)
+        self.cloud_reasoning_effort = cloud_reasoning_effort
         self.local_mlx_model_path = Path(local_mlx_model_path)
         self.mode = mode
+        # Tests inject `mlx_runner(prompt, image, model_path) -> text` instead of loading weights.
         self._custom_mlx_runner = mlx_runner
-        self.cloud_reasoning_effort = cloud_reasoning_effort
         self.mlx_runtime: ResidentMLXRuntime | None = mlx_runtime or (
             ResidentMLXRuntime(self.local_mlx_model_path) if keep_mlx_resident else None
         )
-        # Returns False when the internet uplink is known to be down, so Tier 1 is skipped
-        # immediately instead of waiting out the full cloud timeout during a real outage.
+        # Returns False when the internet uplink is known to be down.
         self.uplink_online_hint = uplink_online_hint
-        # Real Tier 1 responses keyed by (model, effort, prompt, image) so repeat views of the
-        # same corridor return instantly; hits are reported as `cloud_cache_hit=True`.
         self._cloud_cache: dict[str, tuple[DamageSeverity, DamageSeverity, str]] = {}
-        # Real Tier 2 generations from the resident on-device model, keyed the same way.
         # Muse Glimmer needs ~80-90 s per corridor, so warm-up pre-grades the top choke points.
         self._edge_cache: dict[str, tuple[DamageSeverity, DamageSeverity, str]] = {}
         self.last_tier_used: ConnectivityTier = ConnectivityTier.TIER_3_DETERMINISTIC
         self.last_fallback_chain: list[str] = []
 
-    def _cloud_cache_key(
-        self,
-        telemetry: GeometricTelemetry,
-        image_source: str | Path | Image.Image | np.ndarray | bytes | None,
-    ) -> str:
+    @staticmethod
+    def _key_from_environment() -> str:
+        key = os.environ.get("MODEL_API_KEY", "")
+        if not key and "PYTEST_CURRENT_TEST" not in os.environ:
+            try:
+                from dotenv import load_dotenv
+
+                load_dotenv()
+                key = os.environ.get("MODEL_API_KEY", "")
+            except Exception:
+                pass
+        return key
+
+    # ---- prompt, cache keys and cloud request ------------------------------------------------
+    def _build_vlm_prompt(self, telemetry: GeometricTelemetry) -> str:
+        """The same prompt for both models: the measurements, the four grades, JSON only."""
+        t = telemetry
+        grades = "one of: 'no_damage', 'minor_damage', 'major_damage', 'destroyed'"
+        return (
+            "Analyze the post-hurricane road and adjacent building condition using these exact "
+            f"SAM 3.1 geometric measurements: road='{t.road_name}', "
+            f"min_clear_width_m={t.min_clear_width_m:.2f}, debris_area_m2={t.debris_area_m2:.2f}, "
+            f"water_area_m2={t.water_area_m2:.2f}, has_water_obstruction={t.has_water_obstruction}, "
+            f"gsd_m_per_px={t.gsd_m_per_px:.4f}. Respond ONLY with a valid JSON object containing keys: "
+            f"'building_damage_severity' ({grades}), 'road_damage_severity' ({grades}), "
+            "and 'visual_cue_summary' (concise visual and geometric justification)."
+        )
+
+    def _hash(self, *parts: str) -> str:
         digest = hashlib.sha256()
-        for part in (
+        for part in parts:
+            digest.update(part.encode("utf-8") + b"\x00")
+        return digest.hexdigest()
+
+    def _cloud_cache_key(self, telemetry: GeometricTelemetry, image_source: ImageSource) -> str:
+        return self._hash(
             self.cloud_model,
             str(self.cloud_reasoning_effort),
             self._build_vlm_prompt(telemetry),
             _encode_image_to_base64(image_source) or "",
-        ):
-            digest.update(part.encode("utf-8"))
-            digest.update(b"\x00")
-        return digest.hexdigest()
+        )
+
+    def _edge_cache_key(self, telemetry: GeometricTelemetry, image_source: ImageSource) -> str:
+        return self._hash(
+            str(self.local_mlx_model_path),
+            self._build_vlm_prompt(telemetry),
+            _encode_image_to_base64(image_source) or "",
+        )
 
     def _uplink_known_down(self) -> bool:
         return self.uplink_online_hint is not None and self.uplink_online_hint() is False
@@ -625,17 +558,63 @@ class VLMFailoverRouter:
             "model": self.cloud_model,
             "messages": [{"role": "user", "content": content}],
             "temperature": 0.0,
-            "max_tokens": DEFAULT_CLOUD_MAX_TOKENS,
+            "max_tokens": DEFAULT_CLOUD_MAX_TOKENS,  # room for Muse Spark's reasoning tokens
         }
         if self.cloud_reasoning_effort:
             payload["reasoning_effort"] = self.cloud_reasoning_effort
         return payload
 
-    def prewarm_cloud_assessment(
+    def _cloud_request(self, telemetry: GeometricTelemetry, image_source: ImageSource) -> tuple[str, dict, dict]:
+        if not self.api_key:
+            raise RuntimeError("MODEL_API_KEY is not set for Tier 1 Meta Model API.")
+        content: list[dict[str, Any]] = [{"type": "text", "text": self._build_vlm_prompt(telemetry)}]
+        image_b64 = _encode_image_to_base64(image_source)
+        if image_b64:
+            content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}})
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        return f"{self.api_base_url}/chat/completions", self._build_cloud_payload(content), headers
+
+    @staticmethod
+    def _cloud_grade(response: httpx.Response, telemetry: GeometricTelemetry) -> tuple[DamageSeverity, DamageSeverity, str]:
+        response.raise_for_status()
+        text = response.json()["choices"][0]["message"].get("content")
+        if not text or not str(text).strip():
+            raise ValueError("Empty or null message.content returned by Meta Model API")
+        return parse_vlm_json_response(str(text), telemetry, tier_prefix=CLOUD_CUE_PREFIX)
+
+    def _call_tier1_cloud_sync(
         self,
         telemetry: GeometricTelemetry,
-        image_source: str | Path | Image.Image | np.ndarray | bytes | None = None,
-    ) -> bool:
+        image_source: ImageSource = None,
+        http_client: httpx.Client | None = None,
+    ) -> tuple[DamageSeverity, DamageSeverity, str]:
+        """Tier 1: one Chat Completions request to Muse Spark with the crop and measurements."""
+        url, payload, headers = self._cloud_request(telemetry, image_source)
+        timeout = httpx.Timeout(self.cloud_timeout_s)
+        if http_client is not None:
+            response = http_client.post(url, json=payload, headers=headers, timeout=timeout)
+        else:
+            with httpx.Client(timeout=timeout) as client:
+                response = client.post(url, json=payload, headers=headers)
+        return self._cloud_grade(response, telemetry)
+
+    async def _call_tier1_cloud_async(
+        self,
+        telemetry: GeometricTelemetry,
+        image_source: ImageSource = None,
+        async_client: httpx.AsyncClient | None = None,
+    ) -> tuple[DamageSeverity, DamageSeverity, str]:
+        url, payload, headers = self._cloud_request(telemetry, image_source)
+        timeout = httpx.Timeout(self.cloud_timeout_s)
+        if async_client is not None:
+            response = await async_client.post(url, json=payload, headers=headers, timeout=timeout)
+        else:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(url, json=payload, headers=headers)
+        return self._cloud_grade(response, telemetry)
+
+    # ---- warm-up --------------------------------------------------------------------------------
+    def prewarm_cloud_assessment(self, telemetry: GeometricTelemetry, image_source: ImageSource = None) -> bool:
         """
         Run a real Tier 1 Muse Spark call and store it in the response cache (no Tier 2/3
         fallback), so the first on-stage click on a top choke point returns instantly.
@@ -643,34 +622,14 @@ class VLMFailoverRouter:
         if not self.api_key or self._uplink_known_down():
             return False
         key = self._cloud_cache_key(telemetry, image_source)
-        if key in self._cloud_cache:
-            return True
-        try:
-            self._cloud_cache[key] = self._call_tier1_cloud_sync(telemetry, image_source=image_source)
-        except Exception:
-            return False
+        if key not in self._cloud_cache:
+            try:
+                self._cloud_cache[key] = self._call_tier1_cloud_sync(telemetry, image_source=image_source)
+            except Exception:
+                return False
         return True
 
-    def _edge_cache_key(
-        self,
-        telemetry: GeometricTelemetry,
-        image_source: str | Path | Image.Image | np.ndarray | bytes | None,
-    ) -> str:
-        digest = hashlib.sha256()
-        for part in (
-            str(self.local_mlx_model_path),
-            self._build_vlm_prompt(telemetry),
-            _encode_image_to_base64(image_source) or "",
-        ):
-            digest.update(part.encode("utf-8"))
-            digest.update(b"\x00")
-        return digest.hexdigest()
-
-    def prewarm_edge_assessment(
-        self,
-        telemetry: GeometricTelemetry,
-        image_source: str | Path | Image.Image | np.ndarray | bytes | None = None,
-    ) -> bool:
+    def prewarm_edge_assessment(self, telemetry: GeometricTelemetry, image_source: ImageSource = None) -> bool:
         """Run a real Tier 2 generation on the resident model and keep it in the edge cache."""
         if self.mlx_runtime is None:
             return False
@@ -687,481 +646,214 @@ class VLMFailoverRouter:
         self.mlx_runtime.ensure_loaded()
         return self.mlx_runtime.status()
 
-    def _build_vlm_prompt(self, telemetry: GeometricTelemetry) -> str:
-        """Create a compact, telemetry-grounded prompt requesting strict JSON output."""
-        return (
-            "Analyze the post-hurricane road and adjacent building condition using these exact "
-            f"SAM 3.1 geometric measurements: road='{telemetry.road_name}', "
-            f"min_clear_width_m={telemetry.min_clear_width_m:.2f}, "
-            f"debris_area_m2={telemetry.debris_area_m2:.2f}, "
-            f"water_area_m2={telemetry.water_area_m2:.2f}, "
-            f"has_water_obstruction={telemetry.has_water_obstruction}, "
-            f"gsd_m_per_px={telemetry.gsd_m_per_px:.4f}. "
-            "Respond ONLY with a valid JSON object containing keys: "
-            "'building_damage_severity' (one of: 'no_damage', 'minor_damage', 'major_damage', 'destroyed'), "
-            "'road_damage_severity' (one of: 'no_damage', 'minor_damage', 'major_damage', 'destroyed'), "
-            "and 'visual_cue_summary' (concise visual and geometric justification)."
-        )
-
-    def _call_tier1_cloud_sync(
-        self,
-        telemetry: GeometricTelemetry,
-        image_source: str | Path | Image.Image | np.ndarray | bytes | None = None,
-        http_client: httpx.Client | None = None,
-    ) -> tuple[DamageSeverity, DamageSeverity, str]:
-        """
-        Tier 1 (Cloud Primary): Call Meta Model API (`https://api.meta.ai/v1/chat/completions`)
-        with `max_tokens=2048` (accommodating `muse-spark-1.3` reasoning_tokens).
-        """
-        if not self.api_key:
-            raise RuntimeError("MODEL_API_KEY is not set for Tier 1 Meta Model API.")
-
-        prompt = self._build_vlm_prompt(telemetry)
-        b64_img = _encode_image_to_base64(image_source)
-
-        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-        if b64_img:
-            content.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{b64_img}"},
-                }
-            )
-
-        payload = self._build_cloud_payload(content)
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        endpoint = f"{self.api_base_url}/chat/completions"
-
-        timeout = httpx.Timeout(self.cloud_timeout_s)
-        if http_client is not None:
-            response = http_client.post(endpoint, json=payload, headers=headers, timeout=timeout)
-        else:
-            with httpx.Client(timeout=timeout) as client:
-                response = client.post(endpoint, json=payload, headers=headers)
-
-        response.raise_for_status()
-        data = response.json()
-        raw_content = data["choices"][0]["message"].get("content")
-        if not raw_content or not str(raw_content).strip():
-            raise ValueError("Empty or null message.content returned by Meta Model API")
-        return parse_vlm_json_response(
-            str(raw_content),
-            telemetry,
-            tier_prefix="[MUSE-SPARK-1.3 CLOUD VLM]",
-        )
-
-    async def _call_tier1_cloud_async(
-        self,
-        telemetry: GeometricTelemetry,
-        image_source: str | Path | Image.Image | np.ndarray | bytes | None = None,
-        async_client: httpx.AsyncClient | None = None,
-    ) -> tuple[DamageSeverity, DamageSeverity, str]:
-        """Async Tier 1 Meta Model API call with `max_tokens=2048`."""
-        if not self.api_key:
-            raise RuntimeError("MODEL_API_KEY is not set for Tier 1 Meta Model API.")
-
-        prompt = self._build_vlm_prompt(telemetry)
-        b64_img = _encode_image_to_base64(image_source)
-
-        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-        if b64_img:
-            content.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{b64_img}"},
-                }
-            )
-
-        payload = self._build_cloud_payload(content)
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        endpoint = f"{self.api_base_url}/chat/completions"
-
-        timeout = httpx.Timeout(self.cloud_timeout_s)
-        if async_client is not None:
-            response = await async_client.post(endpoint, json=payload, headers=headers, timeout=timeout)
-        else:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(endpoint, json=payload, headers=headers)
-
-        response.raise_for_status()
-        data = response.json()
-        raw_content = data["choices"][0]["message"].get("content")
-        if not raw_content or not str(raw_content).strip():
-            raise ValueError("Empty or null message.content returned by Meta Model API")
-        return parse_vlm_json_response(
-            str(raw_content),
-            telemetry,
-            tier_prefix="[MUSE-SPARK-1.3 CLOUD VLM]",
-        )
-
+    # ---- Tier 2 ---------------------------------------------------------------------------------
     def _call_tier2_mlx(
         self,
         telemetry: GeometricTelemetry,
-        image_source: str | Path | Image.Image | np.ndarray | bytes | None = None,
+        image_source: ImageSource = None,
     ) -> tuple[DamageSeverity, DamageSeverity, str, bool]:
         """
-        Tier 2 (Edge Fallback): Execute local 4-bit quantized Apple Silicon inference via
-        `mlx-vlm` (`models/Muse-Glimmer-30B-4bit`), enforcing strict unified
-        memory cleanup (`del model, processor`, `gc.collect()`, `mx.clear_cache()`) in a
-        `finally` block.
+        Tier 2: grade on the laptop with Muse Glimmer (low reasoning). Uses the resident runtime
+        when there is one, streaming so an agent question can preempt it; otherwise loads the
+        weights for this call only. Unified memory caches are released afterwards either way.
+        Returns (building, road, cue, memory_cleared).
         """
         if not self.local_mlx_model_path.exists():
-            raise FileNotFoundError(
-                f"Local MLX VLM model directory not found: {self.local_mlx_model_path}"
-            )
+            raise FileNotFoundError(f"Local MLX VLM model directory not found: {self.local_mlx_model_path}")
         cacheable = self._custom_mlx_runner is None and self.mlx_runtime is not None
-        if cacheable:
-            cache_key = self._edge_cache_key(telemetry, image_source)
-            if cache_key in self._edge_cache:
-                b_sev, r_sev, cue = self._edge_cache[cache_key]
-                return b_sev, r_sev, cue, False
+        cache_key = self._edge_cache_key(telemetry, image_source) if cacheable else ""
+        if cacheable and cache_key in self._edge_cache:
+            return (*self._edge_cache[cache_key], False)
 
+        if isinstance(image_source, np.ndarray):
+            image_source = Image.fromarray(np.clip(image_source, 0, 255).astype(np.uint8))
         prompt = self._build_vlm_prompt(telemetry)
-        model = None
-        processor = None
-        memory_cleared = False
-        temp_img_path: Path | None = None
-
+        temp_image: Path | None = None
         try:
-            if isinstance(image_source, np.ndarray):
-                arr = (
-                    image_source
-                    if image_source.dtype == np.uint8
-                    else np.clip(image_source, 0, 255).astype(np.uint8)
-                )
-                image_source = Image.fromarray(arr)
-
             if self._custom_mlx_runner is not None:
-                img_arg = (
-                    Image.open(io.BytesIO(image_source))
-                    if isinstance(image_source, bytes)
-                    else image_source
-                )
-                raw_output = self._custom_mlx_runner(prompt, img_arg, self.local_mlx_model_path)
+                image = Image.open(io.BytesIO(image_source)) if isinstance(image_source, bytes) else image_source
+                raw = self._custom_mlx_runner(prompt, image, self.local_mlx_model_path)
             else:
-                has_safetensors = any(self.local_mlx_model_path.glob("*.safetensors"))
-                if not has_safetensors:
-                    raise FileNotFoundError(
-                        f"Local MLX safetensors weights not found in {self.local_mlx_model_path}"
-                    )
-                if (
-                    "PYTEST_CURRENT_TEST" in os.environ
-                    and os.environ.get("FIRSTLIGHT_RUN_REAL_MLX_IN_TESTS") != "1"
-                    and (self.mlx_runtime is None or self.mlx_runtime.uses_default_loader)
-                ):
-                    raise RuntimeError(
-                        "Local 11B MLX weight load skipped in fast unit test; falling through to Tier 3 deterministic."
-                    )
-
-                import tempfile
-
-                images_arg: list[str] | None = None
-                if isinstance(image_source, (str, Path)) and Path(image_source).exists():
-                    images_arg = [str(image_source)]
-                elif isinstance(image_source, bytes):
-                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
-                        tf.write(image_source)
-                        temp_img_path = Path(tf.name)
-                    images_arg = [str(temp_img_path)]
-                elif isinstance(image_source, Image.Image):
-                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
-                        image_source.save(tf, format="PNG")
-                        temp_img_path = Path(tf.name)
-                    images_arg = [str(temp_img_path)]
-
-                runtime = self.mlx_runtime
-
-                def _generate(mlx_model: Any, mlx_processor: Any, config: dict[str, Any]) -> str:
-                    from mlx_vlm import stream_generate
-
-                    formatted_prompt = format_local_prompt(
-                        mlx_processor,
-                        config,
-                        prompt,
-                        num_images=len(images_arg) if images_arg else 0,
-                    )
-                    tokenizer = getattr(mlx_processor, "tokenizer", mlx_processor)
-                    tokenizer.stopping_criteria.reset(mlx_model.config.eos_token_id)
-                    text = ""
-                    # Streamed (rather than `generate`) so a commander question can stop it per token.
-                    for chunk in stream_generate(
-                        mlx_model,
-                        mlx_processor,
-                        formatted_prompt,
-                        image=images_arg,
-                        max_tokens=LOCAL_MAX_TOKENS,
-                        temp=0.0,
-                    ):
-                        if runtime is not None and runtime.preempt_requested:
-                            raise LocalModelPreempted("corridor grade yielded to a commander question")
-                        text += chunk.text
-                    return local_final_answer(text)
-
-                if runtime is not None:
-                    # Resident weights stay loaded; only transient caches are released below.
-                    raw_output = runtime.run(_generate, preemptible=True)
-                else:
-                    from mlx_vlm import load
-                    from mlx_vlm.utils import load_config
-
-                    from src.mlx_patches import apply_mllama_cross_attention_kv_memo
-
-                    apply_mllama_cross_attention_kv_memo()
-                    model, processor = load(str(self.local_mlx_model_path))
-                    raw_output = _generate(
-                        model, processor, load_config(str(self.local_mlx_model_path))
-                    )
-
-            b_sev, r_sev, cue = parse_vlm_json_response(raw_output, telemetry)
+                self._check_local_weights()
+                images, temp_image = self._image_paths_for_mlx(image_source)
+                raw = self._generate_on_device(prompt, images)
+            grade = parse_vlm_json_response(raw, telemetry)
             if cacheable:
-                self._edge_cache[cache_key] = (b_sev, r_sev, cue)
+                self._edge_cache[cache_key] = grade
         finally:
-            if temp_img_path is not None and temp_img_path.exists():
-                try:
-                    temp_img_path.unlink()
-                except OSError:
-                    pass
-            del model
-            del processor
-            mem_info = release_unified_memory()
-            memory_cleared = bool(mem_info.get("cleared", False))
+            if temp_image is not None:
+                temp_image.unlink(missing_ok=True)
+            cleared = bool(release_unified_memory().get("cleared", False))
+        return (*grade, cleared)
 
-        return b_sev, r_sev, cue, memory_cleared
-
-    def assess_damage(
-        self,
-        telemetry: GeometricTelemetry,
-        image_source: str | Path | Image.Image | bytes | None = None,
-        *,
-        http_client: httpx.Client | None = None,
-        force_offline: bool = False,
-    ) -> DamageAssessmentResult:
-        """
-        Execute the 3-tier connectivity circuit breaker synchronously:
-        Tier 1 (Cloud Meta API, 2.5s timeout) -> Tier 2 (Local MLX VLM) -> Tier 3 (Deterministic).
-        When `force_offline=True`, intentionally bypasses Tier 1 to demonstrate instant edge failover.
-        """
-        t0 = time.perf_counter()
-        fallback_chain: list[str] = []
-        tier_used = ConnectivityTier.TIER_3_DETERMINISTIC
-        memory_cleared = False
-        b_sev: DamageSeverity | None = None
-        r_sev: DamageSeverity | None = None
-        cue: str = ""
-
-        # Step 1: Attempt Tier 1 (Cloud Primary) unless force_offline or forced to MLX/Deterministic
-        cloud_cache_hit = False
-        if force_offline:
-            fallback_chain.append("tier_1_cloud:bypassed:force_offline")
-        elif self.mode in (FailoverMode.AUTO, FailoverMode.FORCE_CLOUD):
-            cache_key = self._cloud_cache_key(telemetry, image_source)
-            if self._uplink_known_down():
-                fallback_chain.append("tier_1_cloud:skipped:uplink_down")
-            elif cache_key in self._cloud_cache:
-                b_sev, r_sev, cue = self._cloud_cache[cache_key]
-                tier_used = ConnectivityTier.TIER_1_CLOUD
-                cloud_cache_hit = True
-                fallback_chain.append("tier_1_cloud:cache_hit")
-            else:
-                try:
-                    b_sev, r_sev, cue = self._call_tier1_cloud_sync(
-                        telemetry, image_source=image_source, http_client=http_client
-                    )
-                    self._cloud_cache[cache_key] = (b_sev, r_sev, cue)
-                    tier_used = ConnectivityTier.TIER_1_CLOUD
-                    fallback_chain.append("tier_1_cloud:success")
-                except Exception as exc:
-                    fallback_chain.append(_format_cloud_exception("tier_1_cloud", exc))
-
-        # Step 2: Attempt Tier 2 (Local Apple Silicon MLX VLM) if Tier 1 did not succeed
-        if b_sev is None and (
-            force_offline
-            or self.mode
-            in (
-                FailoverMode.AUTO,
-                FailoverMode.FORCE_CLOUD,
-                FailoverMode.FORCE_MLX,
-            )
+    def _check_local_weights(self) -> None:
+        if not any(self.local_mlx_model_path.glob("*.safetensors")):
+            raise FileNotFoundError(f"Local MLX safetensors weights not found in {self.local_mlx_model_path}")
+        # Unit tests never load 18 GB of weights unless asked to (or given a fake loader).
+        if (
+            "PYTEST_CURRENT_TEST" in os.environ
+            and os.environ.get("FIRSTLIGHT_RUN_REAL_MLX_IN_TESTS") != "1"
+            and (self.mlx_runtime is None or self.mlx_runtime.uses_default_loader)
         ):
-            if self.mode == FailoverMode.FORCE_DETERMINISTIC and not force_offline:
-                pass
-            else:
-                try:
-                    b_sev, r_sev, cue, memory_cleared = self._call_tier2_mlx(
-                        telemetry, image_source=image_source
-                    )
-                    tier_used = ConnectivityTier.TIER_2_MLX
-                    fallback_chain.append("tier_2_mlx:success")
-                except Exception as exc:
-                    fallback_chain.append(f"tier_2_mlx:error:{type(exc).__name__}")
-                    mem_info = release_unified_memory()
-                    memory_cleared = bool(mem_info.get("cleared", False))
+            raise RuntimeError("Real MLX weights are not loaded in unit tests; falling through to Tier 3.")
 
-        # Step 3: Tier 3 Deterministic Geometric Fallback
-        if b_sev is None or r_sev is None:
-            b_sev, r_sev, cue = evaluate_deterministic_tier3(telemetry)
-            tier_used = ConnectivityTier.TIER_3_DETERMINISTIC
-            fallback_chain.append("tier_3_deterministic:success")
-            if not memory_cleared:
-                mem_info = release_unified_memory()
-                memory_cleared = bool(mem_info.get("cleared", False))
+    @staticmethod
+    def _image_paths_for_mlx(image_source: ImageSource) -> tuple[list[str] | None, Path | None]:
+        """mlx-vlm reads images from paths, so bytes and PIL images go through a temp PNG."""
+        import tempfile
 
-        return self._finalize_result(
-            telemetry=telemetry,
-            building_severity=b_sev,
-            road_severity=r_sev,
-            visual_cue_summary=cue,
-            tier_used=tier_used,
-            fallback_chain=fallback_chain,
-            latency_ms=(time.perf_counter() - t0) * 1000.0,
-            memory_cleared=memory_cleared,
-            cloud_cache_hit=cloud_cache_hit,
-        )
+        if isinstance(image_source, (str, Path)) and Path(image_source).exists():
+            return [str(image_source)], None
+        if isinstance(image_source, (bytes, Image.Image)):
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+                if isinstance(image_source, bytes):
+                    tf.write(image_source)
+                else:
+                    image_source.save(tf, format="PNG")
+            return [tf.name], Path(tf.name)
+        return None, None
 
-    async def assess_damage_async(
-        self,
-        telemetry: GeometricTelemetry,
-        image_source: str | Path | Image.Image | bytes | None = None,
-        *,
-        async_client: httpx.AsyncClient | None = None,
-        force_offline: bool = False,
-    ) -> DamageAssessmentResult:
-        """
-        Execute the 3-tier connectivity circuit breaker asynchronously:
-        Tier 1 (Cloud Meta API, 2.5s timeout) -> Tier 2 (Local MLX VLM) -> Tier 3 (Deterministic).
-        When `force_offline=True`, intentionally bypasses Tier 1 to demonstrate instant edge failover.
-        """
-        t0 = time.perf_counter()
-        fallback_chain: list[str] = []
-        tier_used = ConnectivityTier.TIER_3_DETERMINISTIC
-        memory_cleared = False
-        b_sev: DamageSeverity | None = None
-        r_sev: DamageSeverity | None = None
-        cue: str = ""
+    def _generate_on_device(self, prompt: str, images: list[str] | None) -> str:
+        runtime = self.mlx_runtime
 
-        cloud_cache_hit = False
+        def generate(model: Any, processor: Any, config: dict[str, Any]) -> str:
+            from mlx_vlm import stream_generate
+
+            formatted = format_local_prompt(processor, config, prompt, num_images=len(images or []))
+            tokenizer = getattr(processor, "tokenizer", processor)
+            tokenizer.stopping_criteria.reset(model.config.eos_token_id)
+            text = ""
+            # Streamed (rather than `generate`) so a commander question can stop it per token.
+            for chunk in stream_generate(model, processor, formatted, image=images, max_tokens=LOCAL_MAX_TOKENS, temp=0.0):
+                if runtime is not None and runtime.preempt_requested:
+                    raise LocalModelPreempted("corridor grade yielded to a commander question")
+                text += chunk.text
+            return local_final_answer(text)
+
+        if runtime is not None:
+            return runtime.run(generate, preemptible=True)
+        model, processor, config = ResidentMLXRuntime._default_loader(str(self.local_mlx_model_path))
+        try:
+            return generate(model, processor, config)
+        finally:
+            del model, processor
+
+    # ---- the tier sequence ----------------------------------------------------------------------
+    def _start(self, telemetry: GeometricTelemetry, image_source: ImageSource, force_offline: bool) -> _Attempt:
+        """Decide whether Tier 1 runs: skipped offline, pinned elsewhere, down, or served from cache."""
+        attempt = _Attempt(chain=[])
         if force_offline:
-            fallback_chain.append("tier_1_cloud:bypassed:force_offline")
+            attempt.chain.append("tier_1_cloud:bypassed:force_offline")
         elif self.mode in (FailoverMode.AUTO, FailoverMode.FORCE_CLOUD):
-            cache_key = self._cloud_cache_key(telemetry, image_source)
+            key = self._cloud_cache_key(telemetry, image_source)
             if self._uplink_known_down():
-                fallback_chain.append("tier_1_cloud:skipped:uplink_down")
-            elif cache_key in self._cloud_cache:
-                b_sev, r_sev, cue = self._cloud_cache[cache_key]
-                tier_used = ConnectivityTier.TIER_1_CLOUD
-                cloud_cache_hit = True
-                fallback_chain.append("tier_1_cloud:cache_hit")
+                attempt.chain.append("tier_1_cloud:skipped:uplink_down")
+            elif key in self._cloud_cache:
+                attempt.grade, attempt.tier = self._cloud_cache[key], ConnectivityTier.TIER_1_CLOUD
+                attempt.cloud_cache_hit = True
+                attempt.chain.append("tier_1_cloud:cache_hit")
             else:
-                try:
-                    b_sev, r_sev, cue = await self._call_tier1_cloud_async(
-                        telemetry, image_source=image_source, async_client=async_client
-                    )
-                    self._cloud_cache[cache_key] = (b_sev, r_sev, cue)
-                    tier_used = ConnectivityTier.TIER_1_CLOUD
-                    fallback_chain.append("tier_1_cloud:success")
-                except Exception as exc:
-                    fallback_chain.append(_format_cloud_exception("tier_1_cloud", exc))
+                attempt.cloud_cache_key = key
+        return attempt
 
-        if b_sev is None and (
-            force_offline
-            or self.mode
-            in (
-                FailoverMode.AUTO,
-                FailoverMode.FORCE_CLOUD,
-                FailoverMode.FORCE_MLX,
-            )
-        ):
-            if self.mode == FailoverMode.FORCE_DETERMINISTIC and not force_offline:
-                pass
-            else:
-                try:
-                    # Run the multi-second MLX generation off the event loop so live dispatch
-                    # streams to field phones keep flowing during an uplink outage.
-                    b_sev, r_sev, cue, memory_cleared = await asyncio.to_thread(
-                        self._call_tier2_mlx, telemetry, image_source
-                    )
-                    tier_used = ConnectivityTier.TIER_2_MLX
-                    fallback_chain.append("tier_2_mlx:success")
-                except Exception as exc:
-                    fallback_chain.append(f"tier_2_mlx:error:{type(exc).__name__}")
-                    mem_info = release_unified_memory()
-                    memory_cleared = bool(mem_info.get("cleared", False))
+    def _cloud_done(self, attempt: _Attempt, grade: tuple | None, error: Exception | None) -> None:
+        if grade is not None:
+            self._cloud_cache[attempt.cloud_cache_key or ""] = grade
+            attempt.grade, attempt.tier = grade, ConnectivityTier.TIER_1_CLOUD
+            attempt.chain.append("tier_1_cloud:success")
+        elif error is not None:
+            attempt.chain.append(_format_cloud_exception("tier_1_cloud", error))
 
-        if b_sev is None or r_sev is None:
-            b_sev, r_sev, cue = evaluate_deterministic_tier3(telemetry)
-            tier_used = ConnectivityTier.TIER_3_DETERMINISTIC
-            fallback_chain.append("tier_3_deterministic:success")
-            if not memory_cleared:
-                mem_info = release_unified_memory()
-                memory_cleared = bool(mem_info.get("cleared", False))
+    def _edge_allowed(self, attempt: _Attempt) -> bool:
+        return attempt.grade is None and self.mode != FailoverMode.FORCE_DETERMINISTIC
 
-        return self._finalize_result(
-            telemetry=telemetry,
-            building_severity=b_sev,
-            road_severity=r_sev,
-            visual_cue_summary=cue,
-            tier_used=tier_used,
-            fallback_chain=fallback_chain,
-            latency_ms=(time.perf_counter() - t0) * 1000.0,
-            memory_cleared=memory_cleared,
-            cloud_cache_hit=cloud_cache_hit,
-        )
+    def _edge_done(self, attempt: _Attempt, result: tuple | None, error: Exception | None) -> None:
+        if result is not None:
+            *grade, attempt.memory_cleared = result
+            attempt.grade, attempt.tier = tuple(grade), ConnectivityTier.TIER_2_MLX  # type: ignore[assignment]
+            attempt.chain.append("tier_2_mlx:success")
+        elif error is not None:
+            attempt.chain.append(f"tier_2_mlx:error:{type(error).__name__}")
+            attempt.memory_cleared = bool(release_unified_memory().get("cleared", False))
 
-    def _finalize_result(
-        self,
-        *,
-        telemetry: GeometricTelemetry,
-        building_severity: DamageSeverity,
-        road_severity: DamageSeverity,
-        visual_cue_summary: str,
-        tier_used: ConnectivityTier,
-        fallback_chain: list[str],
-        latency_ms: float,
-        memory_cleared: bool,
-        cloud_cache_hit: bool = False,
-    ) -> DamageAssessmentResult:
-        """Assemble the validated `DamageAssessmentResult` schema."""
-        self.last_tier_used = tier_used
-        self.last_fallback_chain = list(fallback_chain)
-
-        passability_flags = compute_passability_flags(
-            min_clear_width_m=telemetry.min_clear_width_m,
-            has_water_obstruction=telemetry.has_water_obstruction,
-        )
-        rationale = _build_grounding_rationale(
-            telemetry=telemetry,
-            passability=passability_flags,
-            building_severity=building_severity,
-            road_severity=road_severity,
-            visual_cue_summary=visual_cue_summary,
-        )
-        sev_score = SEVERITY_TO_SCORE[building_severity]
+    def _finish(self, telemetry: GeometricTelemetry, attempt: _Attempt, t0: float) -> DamageAssessmentResult:
+        if attempt.grade is None:
+            attempt.grade, attempt.tier = evaluate_deterministic_tier3(telemetry), ConnectivityTier.TIER_3_DETERMINISTIC
+            attempt.chain.append("tier_3_deterministic:success")
+            if not attempt.memory_cleared:
+                attempt.memory_cleared = bool(release_unified_memory().get("cleared", False))
+        building, road, cue = attempt.grade
+        self.last_tier_used, self.last_fallback_chain = attempt.tier, list(attempt.chain)
+        flags = compute_passability_flags(telemetry.min_clear_width_m, telemetry.has_water_obstruction)
+        score = SEVERITY_TO_SCORE[building]
         return DamageAssessmentResult(
             target_id=telemetry.target_id,
-            building_damage_severity=building_severity,
-            road_damage_severity=road_severity,
-            severity_score=sev_score,
-            is_high_severity=sev_score >= 2,
-            passability=passability_flags.to_dict(),
+            building_damage_severity=building,
+            road_damage_severity=road,
+            severity_score=score,
+            is_high_severity=score >= 2,
+            passability=flags.to_dict(),
             min_clear_width_m=round(telemetry.min_clear_width_m, 3),
             debris_area_m2=round(telemetry.debris_area_m2, 3),
             water_area_m2=round(telemetry.water_area_m2, 3),
             has_water_obstruction=telemetry.has_water_obstruction,
             gsd_m_per_px=round(telemetry.gsd_m_per_px, 4),
-            passability_rationale=rationale,
-            visual_cue_summary=visual_cue_summary,
-            tier_used=tier_used,
-            fallback_chain=fallback_chain,
-            latency_ms=round(latency_ms, 3),
-            memory_cleared=memory_cleared,
-            cloud_cache_hit=cloud_cache_hit,
+            passability_rationale=_rationale(telemetry, flags, building, road, cue),
+            visual_cue_summary=cue,
+            tier_used=attempt.tier,
+            fallback_chain=attempt.chain,
+            latency_ms=round((time.perf_counter() - t0) * 1000.0, 3),
+            memory_cleared=attempt.memory_cleared,
+            cloud_cache_hit=attempt.cloud_cache_hit,
         )
+
+    def assess_damage(
+        self,
+        telemetry: GeometricTelemetry,
+        image_source: ImageSource = None,
+        *,
+        http_client: httpx.Client | None = None,
+        force_offline: bool = False,
+    ) -> DamageAssessmentResult:
+        """Grade one corridor, trying cloud, laptop, then rules. `force_offline` simulates a blackout."""
+        t0 = time.perf_counter()
+        attempt = self._start(telemetry, image_source, force_offline)
+        if attempt.cloud_cache_key is not None:
+            try:
+                self._cloud_done(attempt, self._call_tier1_cloud_sync(telemetry, image_source, http_client), None)
+            except Exception as exc:
+                self._cloud_done(attempt, None, exc)
+        if self._edge_allowed(attempt):
+            try:
+                self._edge_done(attempt, self._call_tier2_mlx(telemetry, image_source), None)
+            except Exception as exc:
+                self._edge_done(attempt, None, exc)
+        return self._finish(telemetry, attempt, t0)
+
+    async def assess_damage_async(
+        self,
+        telemetry: GeometricTelemetry,
+        image_source: ImageSource = None,
+        *,
+        async_client: httpx.AsyncClient | None = None,
+        force_offline: bool = False,
+    ) -> DamageAssessmentResult:
+        """Async `assess_damage`; the on-device generation runs in a worker thread so dispatch keeps streaming."""
+        t0 = time.perf_counter()
+        attempt = self._start(telemetry, image_source, force_offline)
+        if attempt.cloud_cache_key is not None:
+            try:
+                grade = await self._call_tier1_cloud_async(telemetry, image_source, async_client)
+                self._cloud_done(attempt, grade, None)
+            except Exception as exc:
+                self._cloud_done(attempt, None, exc)
+        if self._edge_allowed(attempt):
+            try:
+                result = await asyncio.to_thread(self._call_tier2_mlx, telemetry, image_source)
+                self._edge_done(attempt, result, None)
+            except Exception as exc:
+                self._edge_done(attempt, None, exc)
+        return self._finish(telemetry, attempt, t0)
 
 
 class IncidentBriefingResult(BaseModel):

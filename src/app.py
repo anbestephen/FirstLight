@@ -46,11 +46,8 @@ from src.failover import (
 from src.geometry import (
     TARGET_METRIC_CRS,
     WGS84_CRS,
-    build_edge_caliper_geojson,
     compute_raster_gsd_and_crs,
     extract_corridor_aerial_crop_png,
-    generate_simulated_disaster_masks_utm,
-    load_and_align_roads,
     load_sam31_masks_utm,
 )
 from src.labeling import router as labeling_router
@@ -176,8 +173,7 @@ class DispatchRequest(BaseModel):
 class FirstLightState:
     """In-memory state manager holding the annotated road graph, masks, layers, and failover router."""
 
-    def __init__(self, *, use_simulated_masks: bool = False) -> None:
-        self.use_simulated_masks: bool = use_simulated_masks
+    def __init__(self) -> None:
         self.base_graph: nx.MultiDiGraph | None = None
         self.active_graph: nx.MultiDiGraph | None = None
         self.cleared_edges: list[tuple[int | str, int | str, int]] = []
@@ -252,33 +248,11 @@ class FirstLightState:
             else BUILDINGS_GEOJSON_PATH
         )
 
-        use_measurements = not self.use_simulated_masks and SAM31_MEASUREMENTS_PATH.exists()
-        self.sam_measurements = (
-            load_sam31_measurements(SAM31_MEASUREMENTS_PATH) if use_measurements else None
-        )
-        G = load_annotated_routing_graph(
-            graphml_path=GRAPHML_PATH,
-            roads_geojson_path=ROADS_GEOJSON_PATH,
-            raster_path=RASTER_TIF_PATH,
-            masks_geojson_path=None if self.use_simulated_masks else SAM31_MASKS_GEOJSON_PATH,
-            simulate_if_no_masks=self.use_simulated_masks,
-            measurements_path=SAM31_MEASUREMENTS_PATH if use_measurements else None,
-        )
+        # Road widths come only from the baked SAM 3.1 measurements (scripts/bake_sam31_masks.py).
+        self.sam_measurements = load_sam31_measurements(SAM31_MEASUREMENTS_PATH)
+        G = load_annotated_routing_graph(graphml_path=GRAPHML_PATH, measurements_path=SAM31_MEASUREMENTS_PATH)
         G = assign_buildings_to_graph_nodes(G, buildings_source=active_buildings_path)
-
-        # Load the baked UTM SAM 3.1 disaster masks (`data/sam31_mexico_beach_masks.geojson`) by default
-        if not self.use_simulated_masks and SAM31_MASKS_GEOJSON_PATH.exists():
-            self.sim_masks_utm = load_sam31_masks_utm(
-                SAM31_MASKS_GEOJSON_PATH, target_crs=TARGET_METRIC_CRS
-            )
-        else:
-            _, edges_gdf = ox.graph_to_gdfs(G)
-            roads_utm = load_and_align_roads(
-                edges_gdf.reset_index(),
-                raster_path=RASTER_TIF_PATH if RASTER_TIF_PATH.exists() else None,
-                target_crs=TARGET_METRIC_CRS,
-            )
-            self.sim_masks_utm = generate_simulated_disaster_masks_utm(roads_utm)
+        self.sim_masks_utm = load_sam31_masks_utm(SAM31_MASKS_GEOJSON_PATH, target_crs=TARGET_METRIC_CRS)
 
         self.base_graph = G
         self.active_graph = G.copy()
@@ -1135,22 +1109,7 @@ def get_choke_point_caliper(edge_id: str) -> dict[str, Any]:
         state.meta_suite.record_model_invocation("sam-3.1", 0.0, "baked_mps_fp16")
         return caliper_fc
 
-    caliper_fc = build_edge_caliper_geojson(
-        centerline_utm=centerline_utm,
-        debris_mask_utm=debris_mask_utm,
-        water_mask_utm=water_mask_utm,
-        road_surface_mask_utm=None,
-        edge_id=canonical_edge_id,
-        u=u,
-        v=v,
-        name=road_name,
-        gsd_m_per_px=gsd_m_per_px,
-        sam_confidence=sam_conf,
-        canopy_or_shadow_occluded=needs_drone,
-        mask_source=mask_src,
-    )
-    state.meta_suite.record_model_invocation("sam-3.1", 11.4, "local_mps_fp16")
-    return caliper_fc
+    raise HTTPException(status_code=404, detail=f"No SAM 3.1 measurement for road {canonical_edge_id}")
 
 
 @app.get("/api/choke-point/{edge_id}/crop.png")

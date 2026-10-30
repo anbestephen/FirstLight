@@ -1,19 +1,17 @@
-# Virtual Environment & Python Cache
+# Python
 .venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
 
-# Model Weights (7.2 GB+)
+# Downloaded model weights (SAM 3.1, Muse Glimmer): fetched by scripts/setup_data_and_models.py
 models/
 
-# Heavy GeoTIFF Rasters (keep small OSM graphs if desired, or ignore all data/)
+# Large imagery and generated map tiles: rebuilt by the scripts in scripts/
 data/*.tif
 data/*.tiff
+data/tiles/
 
-# Environment Secrets & OS files
+# Secrets (copy .env.example to .env) and OS files
 .env
 .DS_Store
-
-# Generated map tiles (scripts/build_map_tiles.py)
-data/tiles/

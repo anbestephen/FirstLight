@@ -38,7 +38,6 @@ from src.geometry import (
     FIRE_ENGINE_MIN_WIDTH_M,
     TARGET_METRIC_CRS,
     WGS84_CRS,
-    evaluate_road_network_clearance,
 )
 
 
@@ -379,77 +378,23 @@ def apply_sam31_measurements(G: nx.MultiDiGraph, payload: dict[str, Any]) -> Non
 
 def load_annotated_routing_graph(
     graphml_path: str | Path = "data/osm_road_graph.graphml",
-    roads_geojson_path: str | Path | None = "data/osm_roads.geojson",
-    raster_path: str | Path | None = "data/noaa_michael_mexico_beach.tif",
-    *,
-    masks_geojson_path: str | Path | None = "data/sam31_mexico_beach_masks.geojson",
-    simulate_if_no_masks: bool = False,
-    measurements_path: str | Path | None = "data/sam31_edge_measurements.json",
+    measurements_path: str | Path = "data/sam31_edge_measurements.json",
 ) -> nx.MultiDiGraph:
     """
-    Load the cached OpenStreetMap road graph (`data/osm_road_graph.graphml`) and annotate
-    every edge with `min_clear_width_m`, `water_overlap_ratio`, `debris_area_sqm`,
-    `sam_confidence`, `needs_drone_recon`, and vehicle-specific edge weights.
-
-    When `measurements_path` exists (baked by `scripts/bake_sam31_masks.py`), the real
-    SAM 3.1 visible-pavement measurements are used; otherwise widths are computed from
-    `masks_geojson_path` polygons via `src/geometry.py`.
+    Load the OpenStreetMap road graph and annotate every edge with its SAM 3.1 measurement
+    (clear width, debris and water area, confidence, drone-recon flag), display names and
+    per-vehicle passability and weights.
     """
+    if not Path(measurements_path).exists():
+        raise FileNotFoundError(
+            f"{measurements_path} not found: run scripts/bake_sam31_masks.py to measure the roads"
+        )
     G = ox.load_graphml(Path(graphml_path))
-
-    # Ensure node x/y coordinates are float
     for _, node_data in G.nodes(data=True):
-        if "x" in node_data:
-            node_data["x"] = float(node_data["x"])
-        if "y" in node_data:
-            node_data["y"] = float(node_data["y"])
-
-    if measurements_path is not None and Path(measurements_path).exists():
-        apply_sam31_measurements(G, load_sam31_measurements(measurements_path))
-        assign_display_names(G)
-        return annotate_graph_with_geometry_metrics(G)
-
-    nodes_gdf, edges_gdf = ox.graph_to_gdfs(G)
-    edges_reset = edges_gdf.reset_index()
-
-    _, clearances = evaluate_road_network_clearance(
-        roads_source=edges_reset,
-        raster_path=raster_path if (raster_path and Path(raster_path).exists()) else None,
-        masks_geojson_path=masks_geojson_path,
-        simulate_if_no_masks=simulate_if_no_masks,
-    )
-
-    for idx, row in edges_reset.iterrows():
-        u = row["u"]
-        v = row["v"]
-        k = row["key"] if "key" in row else 0
-        if idx < len(clearances) and G.has_edge(u, v, k):
-            rec = clearances[idx]
-            edge_data = G[u][v][k]
-            nominal_w = DEFAULT_NOMINAL_ROAD_HALF_WIDTH_M * 2.0
-            corridor_area = max(rec.length_m * nominal_w, 1.0)
-            water_ratio = (
-                rec.water_area_m2 / corridor_area
-                if rec.has_water_obstruction or rec.water_area_m2 > 0.0
-                else 0.0
-            )
-            if rec.has_water_obstruction and water_ratio <= 0.0:
-                water_ratio = 0.1
-
-            edge_data["length_m"] = rec.length_m
-            edge_data["nominal_width_m"] = nominal_w
-            edge_data["min_clear_width_m"] = rec.min_clear_width_m
-            edge_data["water_overlap_ratio"] = water_ratio
-            edge_data["has_water_obstruction"] = rec.has_water_obstruction
-            edge_data["debris_area_sqm"] = rec.debris_area_m2
-            edge_data["water_area_m2"] = rec.water_area_m2
-            edge_data["gsd_m_per_px"] = rec.gsd_m_per_px
-            edge_data["bottleneck_lonlat"] = rec.bottleneck_point_lonlat
-            edge_data["sam_confidence"] = rec.sam_confidence
-            edge_data["needs_drone_recon"] = rec.needs_drone_recon
-            edge_data["mask_source"] = rec.mask_source
-            edge_data["clearance_reason"] = rec.reason
-
+        for axis in ("x", "y"):
+            if axis in node_data:
+                node_data[axis] = float(node_data[axis])
+    apply_sam31_measurements(G, load_sam31_measurements(measurements_path))
     assign_display_names(G)
     return annotate_graph_with_geometry_metrics(G)
 
