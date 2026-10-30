@@ -339,6 +339,31 @@ def load_sam31_measurements(path: str | Path) -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def _apply_record(data: dict[str, Any], rec: dict[str, Any], gsd: float, source: str) -> None:
+    """Copy one SAM 3.1 road measurement onto a graph edge's attributes."""
+    clear_widths = [st["clear_width_m"] for st in rec["stations"] if st["cause"] == "clear"]
+    nominal_w = float(np.median(clear_widths)) if clear_widths else DEFAULT_NOMINAL_ROAD_HALF_WIDTH_M * 2.0
+    length_m = float(rec["length_m"])
+    has_water = bool(rec["has_water_obstruction"])
+    water_ratio = (
+        max(float(rec["water_area_m2"]) / max(length_m * nominal_w, 1.0), 0.01) if has_water else 0.0
+    )
+    data["length_m"] = length_m
+    data["nominal_width_m"] = round(nominal_w, 2)
+    data["min_clear_width_m"] = float(rec["min_clear_width_m"])
+    data["water_overlap_ratio"] = water_ratio
+    data["has_water_obstruction"] = has_water
+    data["debris_area_sqm"] = float(rec["debris_area_m2"])
+    data["water_area_m2"] = float(rec["water_area_m2"])
+    data["gsd_m_per_px"] = gsd
+    data["bottleneck_lonlat"] = rec.get("bottleneck_lonlat")
+    data["sam_confidence"] = float(rec["sam_confidence"])
+    data["needs_drone_recon"] = bool(rec["needs_drone_recon"])
+    data["mask_source"] = source
+    data["measurement_source"] = str(rec.get("measurement_source", "noaa"))
+    data["clearance_reason"] = str(rec.get("reason", ""))
+
+
 def apply_sam31_measurements(G: nx.MultiDiGraph, payload: dict[str, Any]) -> None:
     """
     Annotate graph edges in place from baked SAM 3.1 measurements. `nominal_width_m` (the
@@ -346,34 +371,24 @@ def apply_sam31_measurements(G: nx.MultiDiGraph, payload: dict[str, Any]) -> Non
     SAM measured on the unobstructed stations of that same road.
     """
     gsd = float(payload.get("gsd_m_per_px", 0.2804))
+    source = str(payload.get("mask_source", "sam-3.1"))
     edges = payload.get("edges", {})
-    default_nominal = DEFAULT_NOMINAL_ROAD_HALF_WIDTH_M * 2.0
     for u, v, k, data in G.edges(keys=True, data=True):
         rec = edges.get(f"{u}-{v}-{int(k)}")
         if rec is None:
             data["mask_source"] = "unmeasured"
             data["needs_drone_recon"] = True
             continue
-        clear_widths = [st["clear_width_m"] for st in rec["stations"] if st["cause"] == "clear"]
-        nominal_w = float(np.median(clear_widths)) if clear_widths else default_nominal
-        length_m = float(rec["length_m"])
-        has_water = bool(rec["has_water_obstruction"])
-        water_ratio = (
-            max(float(rec["water_area_m2"]) / max(length_m * nominal_w, 1.0), 0.01) if has_water else 0.0
-        )
-        data["length_m"] = length_m
-        data["nominal_width_m"] = round(nominal_w, 2)
-        data["min_clear_width_m"] = float(rec["min_clear_width_m"])
-        data["water_overlap_ratio"] = water_ratio
-        data["has_water_obstruction"] = has_water
-        data["debris_area_sqm"] = float(rec["debris_area_m2"])
-        data["water_area_m2"] = float(rec["water_area_m2"])
-        data["gsd_m_per_px"] = gsd
-        data["bottleneck_lonlat"] = rec.get("bottleneck_lonlat")
-        data["sam_confidence"] = float(rec["sam_confidence"])
-        data["needs_drone_recon"] = bool(rec["needs_drone_recon"])
-        data["mask_source"] = str(payload.get("mask_source", "sam-3.1"))
-        data["clearance_reason"] = str(rec.get("reason", ""))
+        _apply_record(data, rec, gsd, source)
+
+
+def apply_edge_measurement(G: nx.MultiDiGraph, u: Any, v: Any, k: int, rec: dict[str, Any], gsd: float) -> None:
+    """Replace one road's measurement (both directions), e.g. with a drone re-measurement."""
+    source = "sam-3.1 (drone)" if rec.get("measurement_source") == "drone" else "sam-3.1"
+    for a, b in ((u, v), (v, u)):
+        if G.has_edge(a, b, k):
+            _apply_record(G[a][b][k], rec, gsd, source)
+
 
 
 def load_annotated_routing_graph(

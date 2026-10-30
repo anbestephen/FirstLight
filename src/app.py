@@ -63,6 +63,8 @@ from src.routing import (
     normalize_vehicle_class,
     rank_choke_point_clearance_roi,
     simulate_choke_point_clearance,
+    annotate_graph_with_geometry_metrics,
+    apply_edge_measurement,
 )
 from src.sam_measure import build_caliper_geojson_from_measurement
 from src.voice import VOICE_MODEL, relay_transcription
@@ -79,6 +81,9 @@ BUILDINGS_GEOJSON_PATH = DATA_DIR / "osm_buildings.geojson"
 BUILDINGS_GRADED_GEOJSON_PATH = DATA_DIR / "osm_buildings_graded.geojson"
 SAM31_MASKS_GEOJSON_PATH = DATA_DIR / "sam31_mexico_beach_masks.geojson"
 SAM31_MEASUREMENTS_PATH = DATA_DIR / "sam31_edge_measurements.json"
+# Drone re-measurements of flagged roads (scripts/drone_remeasure.py) and their image patches.
+DRONE_MEASUREMENTS_PATH = DATA_DIR / "sam31_drone_measurements.json"
+DRONE_CACHE_DIR = DATA_DIR / "drone_cache"
 RASTER_TIF_PATH = DATA_DIR / "noaa_michael_mexico_beach.tif"
 
 # Incident command post: the US-98 intersection that reaches the most severely damaged
@@ -180,6 +185,9 @@ class FirstLightState:
         self.raster_meta: dict[str, Any] | None = None
         self.sim_masks_utm: dict[str, Any] | None = None
         self.sam_measurements: dict[str, Any] | None = None
+        self.drone_measurements: dict[str, Any] = {"edges": {}, "skipped": {}}
+        # Original NOAA records of roads whose drone measurement is applied, keyed by edge id.
+        self.noaa_records: dict[str, dict[str, Any]] = {}
         self.buildings_features: list[dict[str, Any]] | None = None
         self.raster_preview_png: bytes | None = None
         self.dispatch = DispatchHub(
@@ -250,6 +258,8 @@ class FirstLightState:
 
         # Road widths come only from the baked SAM 3.1 measurements (scripts/bake_sam31_masks.py).
         self.sam_measurements = load_sam31_measurements(SAM31_MEASUREMENTS_PATH)
+        if DRONE_MEASUREMENTS_PATH.exists():
+            self.drone_measurements = json.loads(DRONE_MEASUREMENTS_PATH.read_text(encoding="utf-8"))
         G = load_annotated_routing_graph(graphml_path=GRAPHML_PATH, measurements_path=SAM31_MEASUREMENTS_PATH)
         G = assign_buildings_to_graph_nodes(G, buildings_source=active_buildings_path)
         self.sim_masks_utm = load_sam31_masks_utm(SAM31_MASKS_GEOJSON_PATH, target_crs=TARGET_METRIC_CRS)
@@ -406,10 +416,45 @@ class FirstLightState:
         else:
             self.cleared_edges.append(pair)
 
+        self._rebuild_active_graph()
+
+    def _rebuild_active_graph(self) -> None:
+        assert self.base_graph is not None
         G = self.base_graph.copy()
         for cu, cv, ck in self.cleared_edges:
             G = simulate_choke_point_clearance(G, cu, cv, ck)
         self.active_graph = G
+
+    def apply_drone_measurement(self, u: Any, v: Any, k: int) -> dict[str, Any]:
+        """Swap a road's NOAA measurement for its drone re-measurement (both directions)."""
+        assert self.base_graph is not None and self.sam_measurements is not None
+        eid, rev = f"{u}-{v}-{k}", f"{v}-{u}-{k}"
+        rec = self.drone_measurements["edges"][eid]
+        edges = self.sam_measurements["edges"]
+        for key in (eid, rev):
+            if key in edges and edges[key].get("measurement_source") != "drone":
+                self.noaa_records[key] = edges[key]
+            edges[key] = rec
+        apply_edge_measurement(self.base_graph, u, v, k, rec, float(rec["imagery"]["gsd_m_per_px"]))
+        self.base_graph = annotate_graph_with_geometry_metrics(self.base_graph)  # per-vehicle passability
+        self._rebuild_active_graph()
+        return rec
+
+    def revert_drone_measurements(self) -> int:
+        """Restore the NOAA measurement of every road that had a drone check applied."""
+        assert self.base_graph is not None and self.sam_measurements is not None
+        gsd = float(self.sam_measurements.get("gsd_m_per_px", 0.2804))
+        roads = set()
+        for key, rec in self.noaa_records.items():
+            self.sam_measurements["edges"][key] = rec
+            u, v, k = key.split("-")
+            uu, vv = self._resolve_node_id(self.base_graph, u), self._resolve_node_id(self.base_graph, v)
+            apply_edge_measurement(self.base_graph, uu, vv, int(k), rec, gsd)
+            roads.add((min(str(uu), str(vv)), max(str(uu), str(vv)), k))
+        self.noaa_records = {}
+        self.base_graph = annotate_graph_with_geometry_metrics(self.base_graph)
+        self._rebuild_active_graph()
+        return len(roads)
 
     def reset_clearances(self) -> None:
         self.ensure_loaded()
@@ -537,6 +582,7 @@ class FirstLightState:
                         "sam_confidence": round(
                             float(data.get("sam_confidence", 0.78)), 4
                         ),
+                        "measurement_source": str(data.get("measurement_source", "noaa")),
                         "needs_drone_recon": bool(
                             data.get("needs_drone_recon", False)
                         ),
@@ -1094,10 +1140,11 @@ def get_choke_point_caliper(edge_id: str) -> dict[str, Any]:
 
     measured = (state.sam_measurements or {}).get("edges", {}).get(canonical_edge_id)
     if measured is not None:
+        from_drone = measured.get("measurement_source") == "drone"
         caliper_fc = build_caliper_geojson_from_measurement(
             measured,
             centerline_utm,
-            state.sim_masks_utm,
+            {} if from_drone else state.sim_masks_utm,  # NOAA masks don't match the drone image
             edge_id=canonical_edge_id,
             u=u,
             v=v,
@@ -1107,6 +1154,12 @@ def get_choke_point_caliper(edge_id: str) -> dict[str, Any]:
             restored_width_m=float(edata.get("nominal_width_m", 8.0)) if is_cleared else None,
         )
         state.meta_suite.record_model_invocation("sam-3.1", 0.0, "baked_mps_fp16")
+        props = caliper_fc.setdefault("properties", {})
+        props["measurement_source"] = "drone" if from_drone else "noaa"
+        props["imagery"] = measured.get("imagery")
+        props["noaa_min_clear_width_m"] = measured.get("noaa_min_clear_width_m")
+        props["drone_available"] = (not from_drone) and canonical_edge_id in state.drone_measurements["edges"]
+        props["drone_unavailable_reason"] = state.drone_measurements.get("skipped", {}).get(canonical_edge_id)
         return caliper_fc
 
     raise HTTPException(status_code=404, detail=f"No SAM 3.1 measurement for road {canonical_edge_id}")
@@ -1119,12 +1172,53 @@ def get_choke_point_crop_png(edge_id: str) -> Response:
     midpoint directly from `data/noaa_michael_mexico_beach.tif` using Rasterio window reading.
     """
     state.ensure_loaded()
-    u, v, _, edata = state.resolve_edge_by_id(edge_id)
+    u, v, k, edata = state.resolve_edge_by_id(edge_id)
     lon, lat = state.get_edge_midpoint_lonlat(u, v, edata)
-    png_bytes = extract_corridor_aerial_crop_png(
-        RASTER_TIF_PATH, lon=lon, lat=lat, size_px=256
-    )
+    source = RASTER_TIF_PATH
+    if edata.get("measurement_source") == "drone":
+        for eid in (f"{u}-{v}-{k}", f"{v}-{u}-{k}"):
+            if (DRONE_CACHE_DIR / f"{eid}.tif").exists():
+                source = DRONE_CACHE_DIR / f"{eid}.tif"
+                break
+    png_bytes = extract_corridor_aerial_crop_png(source, lon=lon, lat=lat, size_px=256)
     return Response(content=png_bytes, media_type="image/png")
+
+
+@app.post("/api/choke-point/{edge_id}/drone-check")
+def post_drone_check(edge_id: str) -> dict[str, Any]:
+    """
+    Replace a flagged road's NOAA measurement with its SAM 3.1 re-measurement on drone imagery
+    (scripts/drone_remeasure.py), then refresh routes and notify field phones.
+    """
+    state.ensure_loaded()
+    u, v, k, edata = state.resolve_edge_by_id(edge_id)
+    eid = f"{u}-{v}-{k}"
+    if eid not in state.drone_measurements["edges"]:
+        reason = state.drone_measurements.get("skipped", {}).get(eid, "no drone imagery covers this road")
+        raise HTTPException(status_code=404, detail=f"No drone re-measurement: {reason}")
+    before = float(edata.get("min_clear_width_m", 0.0))
+    rec = state.apply_drone_measurement(u, v, k)
+    name = _format_edge_name(edata.get("name"), u, v, edata.get("display_name"))
+    state.dispatch.bump("road_remeasured", _field_road_label(name))
+    return {
+        "edge_id": eid,
+        "road": name,
+        "noaa_min_clear_width_m": before,
+        "drone_min_clear_width_m": rec["min_clear_width_m"],
+        "passability": {vc: rec["min_clear_width_m"] > w for vc, w in VEHICLE_MIN_WIDTH_M.items()},
+        "imagery": rec["imagery"],
+        "reason": rec["reason"],
+    }
+
+
+@app.post("/api/drone/reset")
+def post_drone_reset() -> dict[str, Any]:
+    """Put back the NOAA measurement on every road that had a drone check applied."""
+    state.ensure_loaded()
+    roads = state.revert_drone_measurements()
+    if roads:
+        state.dispatch.bump("drone_reset")
+    return {"reverted_roads": roads}
 
 
 @app.get("/api/choke-point/{edge_id}/recon-schematic.png")

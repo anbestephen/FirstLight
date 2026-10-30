@@ -492,11 +492,87 @@
         updateCaliperThresholdGauge(cProps.min_clear_width_m, Boolean(cProps.has_water_obstruction));
       }
       updateSamConfidenceAndReconBadge(cProps.sam_confidence, cProps.needs_drone_recon);
+      renderDroneRow(cProps);
       // Replay the measurement when the user explicitly picks a corridor.
       renderCaliperLayer(caliperGeojson, Boolean(zoomToCorridor), animate);
     }
     await vlmDone;
     await refreshMetaModelsTelemetry();
+  }
+
+  // Drone check: flagged roads can be re-measured from CRASAR drone imagery (Oct 13–14, 2018).
+  function renderDroneRow(props) {
+    const row = document.getElementById("drone-row");
+    const btn = document.getElementById("btn-drone-check");
+    const label = document.getElementById("drone-source");
+    if (props.measurement_source === "drone" && props.imagery) {
+      row.classList.remove("hidden");
+      btn.classList.add("hidden");
+      const before = props.noaa_min_clear_width_m;
+      label.innerHTML =
+        `Re-measured from drone imagery, ${escapeHtml(props.imagery.flown)} (${props.imagery.gsd_m_per_px} m/px)` +
+        (before !== undefined && before !== null ? ` · NOAA <b>${Number(before).toFixed(1)} m</b> → drone <b>${Number(props.min_clear_width_m).toFixed(1)} m</b>` : "");
+    } else if (props.drone_available) {
+      row.classList.remove("hidden");
+      btn.classList.remove("hidden");
+      btn.disabled = false;
+      btn.textContent = "Drone check";
+      label.textContent = "Drone imagery covers this road";
+    } else if (props.needs_drone_recon && props.drone_unavailable_reason) {
+      row.classList.remove("hidden");
+      btn.classList.add("hidden");
+      label.textContent = `No drone re-measurement: ${props.drone_unavailable_reason}`;
+    } else {
+      row.classList.add("hidden");
+    }
+  }
+
+  async function runDroneCheck() {
+    if (!state.activeEdgeId) return;
+    const btn = document.getElementById("btn-drone-check");
+    btn.disabled = true;
+    btn.textContent = "Measuring…";
+    const res = await fetch(`/api/choke-point/${encodeURIComponent(state.activeEdgeId)}/drone-check`, { method: "POST" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      document.getElementById("drone-source").textContent = err.detail || "Drone check failed";
+      btn.disabled = false;
+      btn.textContent = "Drone check";
+      return;
+    }
+    const data = await res.json();
+    showToast(
+      `${data.road}: NOAA ${Number(data.noaa_min_clear_width_m).toFixed(1)} m → drone ${Number(data.drone_min_clear_width_m).toFixed(1)} m`
+    );
+    await refreshAfterMeasurementChange();
+  }
+
+  async function undoDroneChecks() {
+    await fetch("/api/drone/reset", { method: "POST" });
+    await refreshAfterMeasurementChange();
+  }
+
+  // Road widths changed: reload the measured layer and everything computed from it.
+  async function refreshAfterMeasurementChange() {
+    const res = await fetch("/api/layers");
+    const data = await res.json();
+    state.roadsGeojson = data.roads;
+    renderRoadsLayer();
+    await Promise.all([refreshRoute(), refreshClearanceRoi()]);
+    if (state.activeEdgeId) {
+      updateInspectorImage();
+      await inspectCorridorByEdgeId(state.activeEdgeId, true);
+    }
+  }
+
+  function showToast(text) {
+    const bannerEl = document.getElementById("unlocked-impact-banner");
+    document.getElementById("unlocked-impact-text").textContent = text;
+    bannerEl.classList.remove("hidden");
+    clearTimeout(state.toastTimer);
+    state.toastTimer = setTimeout(function () {
+      bannerEl.classList.add("hidden");
+    }, 7000);
   }
 
   function updateSamConfidenceAndReconBadge(samConfidence, needsDroneRecon) {
@@ -1855,6 +1931,8 @@
     });
 
     document.getElementById("inspector-close").addEventListener("click", closeInspector);
+    document.getElementById("btn-drone-check").addEventListener("click", runDroneCheck);
+    document.getElementById("btn-drone-reset").addEventListener("click", undoDroneChecks);
 
     const blackoutToggle = document.getElementById("toggle-comms-blackout");
     blackoutToggle.addEventListener("change", async function (ev) {

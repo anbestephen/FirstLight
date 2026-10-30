@@ -55,6 +55,10 @@
         return { text: `Clearance undone${detail} — route updated`, warn: true };
       case "clearances_reset":
         return { text: "All clearances reset — route updated", warn: true };
+      case "road_remeasured":
+        return { text: `Re-measured from drone imagery${detail} — route updated`, warn: false };
+      case "drone_reset":
+        return { text: "Drone re-measurements removed — route updated", warn: true };
       case "vehicle_changed":
         return { text: `Now routing for ${vehicle}`, warn: false };
       case "route_reassigned":

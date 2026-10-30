@@ -113,6 +113,9 @@
           <button type="button" class="menu-item" id="btn-export-manifest">
             <strong>Export field manifest</strong><span class="muted">Route, steps and clearance queue as GeoJSON</span>
           </button>
+          <button type="button" class="menu-item" id="btn-drone-reset">
+            <strong>Undo drone checks</strong><span class="muted">Put back the NOAA measurement on re-measured roads</span>
+          </button>
           <a class="menu-item" href="/field" target="_blank" rel="noopener">
             <strong>Open field phone view</strong><span class="muted">What responders see over local Wi-Fi</span>
           </a>
@@ -305,6 +308,11 @@
         <div class="insp-width">
           <span class="insp-width-val" id="gauge-measured-span-label">– m</span>
           <span class="muted">narrowest clear width</span>
+        </div>
+        <div class="drone-row hidden" id="drone-row">
+          <button type="button" class="btn btn-drone" id="btn-drone-check"
+                  title="Re-measure this road with SAM 3.1 on drone imagery (CRASAR, Oct 13–14, 2018)">Drone check</button>
+          <span class="drone-source" id="drone-source"></span>
         </div>
         <div class="gauge-badges-row" id="gauge-vehicle-badges">
           <span class="gauge-v-badge" id="gauge-badge-atv">ATV</span>

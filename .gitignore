@@ -18,3 +18,8 @@ data/tiles/
 # Secrets (copy .env.example to .env) and OS files
 .env
 .DS_Store
+
+# Drone patches fetched by scripts/drone_remeasure.py (re-downloadable)
+data/drone_cache/
+models
+data/tiles
