@@ -1,3 +1,5 @@
+> **Pre-hackathon plan,** written before building opened (12:24 PM ET, Oct 26, 2026) and kept unchanged for transparency. It does not describe the finished system: see [README.md](README.md) for what was built and measured.
+
 # FirstLight — Comprehensive 5-Phase Implementation Blueprint (`PLAN.md`)
 
 **Hardware Profile:** Apple Silicon MacBook Pro M1 Max (64 GB Unified Memory)  

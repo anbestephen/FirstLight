@@ -197,7 +197,7 @@ Building opened when the kickoff ended, at 12:24 PM ET on Oct 26, 2026, and runs
 
 - **Pre-existing (before 12:24 PM ET):**
   - the project plan ([`PLAN.md`](PLAN.md)) and agent rules (`.agents/`, the first lines of `AGENTS.md`);
-  - public data downloads: the NOAA post-storm image and OpenStreetMap extracts for Mexico Beach (`data/osm_*`);
+  - public data and model downloads: the NOAA post-storm image of Mexico Beach (`data/noaa_michael_mexico_beach.tif`), OpenStreetMap extracts (`data/osm_*`), and the SAM 3.1 and Llama 3.2 weights;
   - early code in commits `04542ed` (12:01 PM), `b489ebe` (12:15 PM) and `4a06adc` (12:24 PM). None of that code remains in use:
     - its unused parts were deleted;
     - the parts still needed (`src/geometry.py`, the grading router in `src/failover.py`, their tests and the project config) were rewritten during the event.
@@ -236,7 +236,7 @@ src/
 ui/                 Commander dashboard, field phone view, labelling page (Leaflet vendored)
 scripts/            Data fetch, SAM bake, Muse Spark grading, tiles, benchmark samples
 benchmarks/         run_benchmarks.py and results
-data/               OSM extracts, SAM measurements, building grades, labels (rasters/tiles rebuilt by scripts)
+data/               NOAA image crop, OSM extracts, SAM measurements, building grades, labels (other rasters and tiles rebuilt by scripts)
 tests/              pytest suite
 docs/img/           Screenshots
 ```

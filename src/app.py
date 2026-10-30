@@ -1399,7 +1399,7 @@ async def post_benchmark_tiers(req: BenchmarkTiersRequest) -> dict[str, Any]:
             telemetry, image_source=crop_bytes, force_offline=True
         )
 
-        # 3. Tier 1: Meta Cloud API (muse-spark / sam-3.1) with 2.5s timeout
+        # 3. Tier 1: Muse Spark on the Meta Model API (15 s timeout)
         t0_cloud = time.perf_counter()
         if req.force_offline:
             t1_latency_ms = round((time.perf_counter() - t0_cloud) * 1000.0, 3)

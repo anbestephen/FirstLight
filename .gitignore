@@ -10,6 +10,9 @@ models/
 # Large imagery and generated map tiles: rebuilt by the scripts in scripts/
 data/*.tif
 data/*.tiff
+# ...except the 18 MB NOAA Mexico Beach crop (public domain), which the app needs to run.
+# NOAA now serves this flight only as a 14.9 GB archive, so the crop is kept in the repo.
+!data/noaa_michael_mexico_beach.tif
 data/tiles/
 
 # Secrets (copy .env.example to .env) and OS files

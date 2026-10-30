@@ -15,7 +15,6 @@ import argparse
 import json
 import subprocess
 import sys
-import urllib.request
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -23,10 +22,9 @@ DATA_DIR = PROJECT_ROOT / "data"
 MODELS_DIR = PROJECT_ROOT / "models"
 BENCHMARKS_DIR = PROJECT_ROOT / "benchmarks"
 
-NOAA_GEOTIFF_URL = (
-    "https://storms.ngs.noaa.gov/storms/michael/data/20181011a_RGB/"
-    "20181011a_299230_0854230_rgb.tif"
-)
+# The Mexico Beach crop is committed at data/noaa_michael_mexico_beach.tif. Its source is the
+# Oct 11, 2018 flight, which NOAA now serves only as a whole-flight archive (14.9 GB).
+NOAA_SOURCE_ARCHIVE = "https://stormscdn.ngs.noaa.gov/downloads/20181011a_RGB.tar"
 SAM31_HF_REPO = "facebook/sam3.1"
 MLX_VLM_HF_REPO = "mlx-community/Muse-Glimmer-30B-4bit"
 
@@ -148,8 +146,10 @@ def download_missing_assets() -> None:
 
     geotiff_path = DATA_DIR / "noaa_michael_mexico_beach.tif"
     if not geotiff_path.exists():
-        print(f"[download] Fetching NOAA Hurricane Michael GeoTIFF -> {geotiff_path} ...")
-        urllib.request.urlretrieve(NOAA_GEOTIFF_URL, geotiff_path)
+        raise SystemExit(
+            f"{geotiff_path} is missing. It is part of the repository: restore it with "
+            f"`git checkout -- {geotiff_path.relative_to(PROJECT_ROOT)}` (source archive: {NOAA_SOURCE_ARCHIVE})."
+        )
 
     sam_dir = MODELS_DIR / "sam3.1"
     if not (sam_dir / "model.safetensors").exists():
