@@ -159,7 +159,7 @@ Apple Silicon Mac, Python 3.11+.
 ```bash
 python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
 ./.venv/bin/python scripts/setup_data_and_models.py --check      # or --download on a fresh clone
-echo 'export MODEL_API_KEY=your_meta_model_api_key' > .env       # optional; without it FirstLight runs on-device
+cp .env.example .env   # then add your Meta Model API key; optional: without it FirstLight runs on the laptop
 ./.venv/bin/uvicorn src.app:app --host 0.0.0.0 --port 8000
 ```
 
@@ -193,10 +193,18 @@ Tests: `./.venv/bin/pytest`.
 
 ## Hackathon build log
 
-The hackathon kicked off Oct 26, 2026 at 12:00 PM ET; the building period runs Oct 27 – Nov 4.
+Building opened when the kickoff ended, at 12:24 PM ET on Oct 26, 2026, and runs until Nov 4.
 
-- **Before kickoff:** the project plan ([`PLAN.md`](PLAN.md)), agent rules ([`AGENTS.md`](AGENTS.md), `.agents/`), and downloads of public datasets and model weights (NOAA imagery, OpenStreetMap extracts, SAM 3.1 and Llama 3.2 weights).
-- **Kickoff day (Oct 26):** scaffolding (`04542ed`, 12:01 PM). First code commit `b489ebe` at 12:15 PM. First versions of measurement, routing, failover, the API and the dashboard, then the field-phone sync, latency work and the measurement replay (`00cb66e` … `bc39159`).
+- **Pre-existing (before 12:24 PM ET):**
+  - the project plan ([`PLAN.md`](PLAN.md)) and agent rules (`.agents/`, the first lines of `AGENTS.md`);
+  - public data downloads: the NOAA post-storm image and OpenStreetMap extracts for Mexico Beach (`data/osm_*`);
+  - early code in commits `04542ed` (12:01 PM), `b489ebe` (12:15 PM) and `4a06adc` (12:24 PM). None of that code remains in use:
+    - its unused parts were deleted;
+    - the parts still needed (`src/geometry.py`, the grading router in `src/failover.py`, their tests and the project config) were rewritten during the event.
+
+    Lines that `git blame` still attributes to those commits are shared imports, constants and interface names.
+- **Built during the event:** everything else.
+  - **Oct 26:** first versions of routing, the API and the dashboard, then the field-phone sync, latency work and the measurement replay (`80b1501` … `bc39159`).
 - **Building period (Oct 27 onward):**
   - real SAM 3.1 measurements replacing rule-placed obstacle polygons (`6410e01`);
   - blind labelling and the held-out benchmark (`2e1b948`, `a6e53af`);
