@@ -1313,7 +1313,7 @@
           const calls = `${m.call_count} call${m.call_count === 1 ? "" : "s"}`;
           subEl.textContent = !m.call_count
             ? "ready"
-            : m.last_latency_ms > 0
+            : m.last_latency_ms >= 50 // real model calls take seconds; cache and baked reads take < 1 ms
             ? `${calls} · ${(m.last_latency_ms / 1000).toFixed(1)} s`
             : `${calls} · cached`;
         }
