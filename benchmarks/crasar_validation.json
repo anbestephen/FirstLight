@@ -1,0 +1,1095 @@
+{
+  "source": "CRASAR-U-DROIDs (CC-BY-4.0), Mexico Beach sUAS scenes 10132018 and 10142018",
+  "buildings": {
+    "osm_buildings": 334,
+    "matched_to_crasar_drone_labels": 236,
+    "muse_spark_vs_crasar_drone": {
+      "labeled": 236,
+      "grading_source": "muse-spark-1.3 (NOAA+NAIP)",
+      "four_class_accuracy": 0.3432,
+      "within_one_grade": 0.8008,
+      "high_severity_accuracy": 0.6992,
+      "high_severity_precision": 0.6393,
+      "high_severity_recall": 0.4432,
+      "high_severity_f1": 0.5235,
+      "confusion": {
+        "no_damage": {
+          "no_damage": 38,
+          "minor_damage": 2,
+          "major_damage": 3,
+          "destroyed": 3
+        },
+        "minor_damage": {
+          "no_damage": 71,
+          "minor_damage": 15,
+          "major_damage": 10,
+          "destroyed": 6
+        },
+        "major_damage": {
+          "no_damage": 30,
+          "minor_damage": 14,
+          "major_damage": 11,
+          "destroyed": 9
+        },
+        "destroyed": {
+          "no_damage": 3,
+          "minor_damage": 2,
+          "major_damage": 2,
+          "destroyed": 17
+        }
+      }
+    },
+    "muse_spark_vs_crasar_noaa_image": {
+      "labeled": 236,
+      "grading_source": "muse-spark-1.3 (NOAA+NAIP)",
+      "four_class_accuracy": 0.3814,
+      "within_one_grade": 0.8263,
+      "high_severity_accuracy": 0.7415,
+      "high_severity_precision": 0.541,
+      "high_severity_recall": 0.5,
+      "high_severity_f1": 0.5197,
+      "confusion": {
+        "no_damage": {
+          "no_damage": 42,
+          "minor_damage": 3,
+          "major_damage": 2,
+          "destroyed": 2
+        },
+        "minor_damage": {
+          "no_damage": 75,
+          "minor_damage": 22,
+          "major_damage": 12,
+          "destroyed": 12
+        },
+        "major_damage": {
+          "no_damage": 21,
+          "minor_damage": 8,
+          "major_damage": 11,
+          "destroyed": 6
+        },
+        "destroyed": {
+          "no_damage": 4,
+          "minor_damage": 0,
+          "major_damage": 1,
+          "destroyed": 15
+        }
+      }
+    },
+    "hand_labels_vs_crasar_drone": {
+      "labeled": 59,
+      "grading_source": "FirstLight hand labels (NOAA)",
+      "four_class_accuracy": 0.4407,
+      "within_one_grade": 0.8983,
+      "high_severity_accuracy": 0.7458,
+      "high_severity_precision": 0.7778,
+      "high_severity_recall": 0.35,
+      "high_severity_f1": 0.4828,
+      "confusion": {
+        "no_damage": {
+          "no_damage": 13,
+          "minor_damage": 1,
+          "major_damage": 0,
+          "destroyed": 0
+        },
+        "minor_damage": {
+          "no_damage": 12,
+          "minor_damage": 11,
+          "major_damage": 2,
+          "destroyed": 0
+        },
+        "major_damage": {
+          "no_damage": 4,
+          "minor_damage": 7,
+          "major_damage": 2,
+          "destroyed": 2
+        },
+        "destroyed": {
+          "no_damage": 1,
+          "minor_damage": 1,
+          "major_damage": 3,
+          "destroyed": 0
+        }
+      }
+    }
+  },
+  "roads": {
+    "roads_compared": 100,
+    "crosstab_sam_vs_crasar": {
+      "blocked|blocked": 18,
+      "blocked|clear": 18,
+      "blocked|narrowed": 10,
+      "narrowed|clear": 10,
+      "narrowed|narrowed": 3,
+      "open|blocked": 1,
+      "open|clear": 36,
+      "open|narrowed": 4
+    },
+    "crasar_total_blockages": 19,
+    "of_which_sam_closed_to_ambulance": 18,
+    "sam_open_to_fire_engine": 41,
+    "of_which_crasar_total_blockage": 1,
+    "sam_blocked_crasar_clear": 18,
+    "of_which_flagged_for_drone_recon": 14,
+    "rows": [
+      {
+        "edge_id": "95800288-95800290-0",
+        "crasar": "narrowed",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Obstruction"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95800288-95812763-0",
+        "crasar": "narrowed",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Obstruction"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95800290-95812765-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 5.75,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95800290-95800294-0",
+        "crasar": "clear",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95800294-95812767-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 6.75,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95803065-95855260-0",
+        "crasar": "blocked",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Obstruction",
+          "Particulate Partial",
+          "Particulate Total",
+          "Total Obstruction"
+        ],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95803065-95827863-0",
+        "crasar": "clear",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95803065-95827861-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 4.75,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95807649-95833264-0",
+        "crasar": "narrowed",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Obstruction",
+          "Particulate Total"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95807649-95824148-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 5.75,
+        "crasar_labels": [
+          "Particulate Partial"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95807649-4057276774-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 5.75,
+        "crasar_labels": [
+          "Particulate Partial"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95808515-95837679-0",
+        "crasar": "blocked",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Obstruction",
+          "Particulate Total",
+          "Total Obstruction"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95808515-10052533625-0",
+        "crasar": "blocked",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Obstruction",
+          "Particulate Total",
+          "Total Obstruction"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95808515-95844774-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 5.25,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95812763-95812765-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 6.0,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95812765-4058598943-0",
+        "crasar": "narrowed",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Obstruction"
+        ],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95812765-95812767-0",
+        "crasar": "clear",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95815850-95855855-0",
+        "crasar": "narrowed",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Obstruction",
+          "Particulate Partial",
+          "Particulate Total"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95815850-95827863-0",
+        "crasar": "clear",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95824148-95827849-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 8.0,
+        "crasar_labels": [
+          "Particulate Partial"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95827823-10058051233-0",
+        "crasar": "narrowed",
+        "sam": "open",
+        "width_m": 5.75,
+        "crasar_labels": [
+          "Partial Obstruction",
+          "Partial Road Condition",
+          "Particulate Partial"
+        ],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827826-95841487-0",
+        "crasar": "narrowed",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Obstruction",
+          "Particulate Partial"
+        ],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827826-95827833-0",
+        "crasar": "narrowed",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Road Condition",
+          "Particulate Partial"
+        ],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827833-95842038-0",
+        "crasar": "clear",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Particulate Partial",
+          "Particulate Total"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95827833-95827837-0",
+        "crasar": "clear",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Particulate Partial"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95827837-95827838-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 7.75,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827838-95827839-0",
+        "crasar": "narrowed",
+        "sam": "open",
+        "width_m": 4.25,
+        "crasar_labels": [
+          "Partial Obstruction",
+          "Partial Road Condition"
+        ],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827839-95827840-0",
+        "crasar": "clear",
+        "sam": "narrowed",
+        "width_m": 2.25,
+        "crasar_labels": [
+          "Particulate Partial"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95827840-95827842-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 3.75,
+        "crasar_labels": [
+          "Particulate Partial",
+          "Particulate Total"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95827842-95827843-0",
+        "crasar": "clear",
+        "sam": "blocked",
+        "width_m": 1.0,
+        "crasar_labels": [
+          "Particulate Partial"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95827843-8733927176-0",
+        "crasar": "narrowed",
+        "sam": "narrowed",
+        "width_m": 2.25,
+        "crasar_labels": [
+          "Partial Obstruction",
+          "Partial Road Condition",
+          "Particulate Partial"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95827846-95827848-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 4.25,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827846-8733927176-0",
+        "crasar": "narrowed",
+        "sam": "narrowed",
+        "width_m": 2.0,
+        "crasar_labels": [
+          "Partial Obstruction",
+          "Partial Road Condition",
+          "Particulate Partial"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95827848-10052533654-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 4.0,
+        "crasar_labels": [
+          "Particulate Partial"
+        ],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827852-95827854-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 8.75,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827852-4057276774-0",
+        "crasar": "clear",
+        "sam": "narrowed",
+        "width_m": 3.5,
+        "crasar_labels": [],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95827854-95836312-0",
+        "crasar": "narrowed",
+        "sam": "narrowed",
+        "width_m": 2.75,
+        "crasar_labels": [
+          "Partial Obstruction",
+          "Partial Road Condition"
+        ],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827854-4058598944-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 8.5,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827855-95836964-0",
+        "crasar": "blocked",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Particulate Partial",
+          "Total Obstruction"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95827855-95827856-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 5.0,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827855-4058598944-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 5.75,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827856-95837473-0",
+        "crasar": "blocked",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Particulate Partial",
+          "Particulate Total",
+          "Total Obstruction"
+        ],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827856-95827858-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 7.5,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827858-95838099-0",
+        "crasar": "blocked",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Obstruction",
+          "Particulate Partial",
+          "Particulate Total",
+          "Total Obstruction"
+        ],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827858-95827859-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 4.5,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827859-95837313-0",
+        "crasar": "blocked",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Obstruction",
+          "Particulate Partial",
+          "Particulate Total",
+          "Total Obstruction"
+        ],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827859-95827860-0",
+        "crasar": "clear",
+        "sam": "narrowed",
+        "width_m": 3.25,
+        "crasar_labels": [],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95827860-95853841-0",
+        "crasar": "blocked",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Obstruction",
+          "Particulate Partial",
+          "Particulate Total",
+          "Total Obstruction"
+        ],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827860-95827861-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 5.0,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827861-95852197-0",
+        "crasar": "blocked",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Obstruction",
+          "Particulate Partial",
+          "Particulate Total",
+          "Total Obstruction"
+        ],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95827863-95838490-0",
+        "crasar": "blocked",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Particulate Partial",
+          "Particulate Total",
+          "Total Obstruction"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95835402-95835409-0",
+        "crasar": "clear",
+        "sam": "narrowed",
+        "width_m": 1.75,
+        "crasar_labels": [],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95835409-1987589033-0",
+        "crasar": "clear",
+        "sam": "narrowed",
+        "width_m": 2.25,
+        "crasar_labels": [],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95835409-95857258-0",
+        "crasar": "blocked",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Particulate Partial",
+          "Total Obstruction"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95835651-95835652-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 4.5,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95835651-95838442-0",
+        "crasar": "clear",
+        "sam": "narrowed",
+        "width_m": 2.0,
+        "crasar_labels": [],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95835651-95853337-0",
+        "crasar": "clear",
+        "sam": "narrowed",
+        "width_m": 2.0,
+        "crasar_labels": [],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95835652-95835654-0",
+        "crasar": "clear",
+        "sam": "narrowed",
+        "width_m": 1.75,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95835652-95835654-1",
+        "crasar": "clear",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95835654-95844769-0",
+        "crasar": "clear",
+        "sam": "narrowed",
+        "width_m": 2.0,
+        "crasar_labels": [],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95836965-10052533584-0",
+        "crasar": "blocked",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Obstruction",
+          "Particulate Total",
+          "Total Obstruction"
+        ],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95837314-10052533560-0",
+        "crasar": "narrowed",
+        "sam": "open",
+        "width_m": 4.25,
+        "crasar_labels": [
+          "Partial Obstruction"
+        ],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95837474-10052533580-0",
+        "crasar": "narrowed",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Obstruction"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95837698-95841487-0",
+        "crasar": "clear",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Particulate Partial"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95837698-95841485-0",
+        "crasar": "narrowed",
+        "sam": "open",
+        "width_m": 5.0,
+        "crasar_labels": [
+          "Partial Flooding",
+          "Partial Obstruction",
+          "Particulate Partial"
+        ],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95838100-10052533570-0",
+        "crasar": "clear",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95839433-10052533656-0",
+        "crasar": "clear",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Particulate Partial"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95839433-95844774-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 3.75,
+        "crasar_labels": [],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95839433-95844773-0",
+        "crasar": "clear",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95839434-95841485-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 6.25,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95840905-10058051222-0",
+        "crasar": "narrowed",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Road Condition",
+          "Particulate Partial"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95840905-95841487-0",
+        "crasar": "blocked",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Obstruction",
+          "Particulate Partial",
+          "Particulate Total",
+          "Total Obstruction"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95844769-95853337-0",
+        "crasar": "narrowed",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Obstruction"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95844769-95844773-0",
+        "crasar": "clear",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95844773-10052533660-0",
+        "crasar": "blocked",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Obstruction",
+          "Particulate Total",
+          "Total Obstruction"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95844774-10052533646-0",
+        "crasar": "blocked",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Total Obstruction"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95844920-10052490564-0",
+        "crasar": "clear",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95853337-95853569-0",
+        "crasar": "clear",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95853341-9871730900-1",
+        "crasar": "blocked",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Particulate Partial",
+          "Particulate Total",
+          "Total Obstruction"
+        ],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "95853341-1987589055-0",
+        "crasar": "clear",
+        "sam": "narrowed",
+        "width_m": 3.5,
+        "crasar_labels": [
+          "Particulate Partial",
+          "Particulate Total"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "95853650-10052533680-0",
+        "crasar": "clear",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Particulate Partial",
+          "Particulate Total"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "1987589023-1987589054-0",
+        "crasar": "blocked",
+        "sam": "open",
+        "width_m": 7.5,
+        "crasar_labels": [
+          "Total Obstruction"
+        ],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "1987589023-1987589053-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 6.5,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "1987589023-1987589058-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 6.5,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "1987589026-1987589032-0",
+        "crasar": "clear",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "1987589026-1987589026-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 5.0,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "1987589026-1987589026-1",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 5.0,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "1987589028-1987589033-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 5.5,
+        "crasar_labels": [],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "1987589028-1987589053-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 5.5,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "1987589028-1987589054-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 6.5,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "1987589033-1987589038-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 6.5,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "1987589034-1987589038-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 7.25,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "1987589038-1987589054-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 7.5,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "1987589040-1987589054-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 6.5,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "1987589046-1987589053-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 6.75,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "1987589046-1987589057-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 4.0,
+        "crasar_labels": [],
+        "drone_recon": false
+      },
+      {
+        "edge_id": "1987589057-1987589055-0",
+        "crasar": "clear",
+        "sam": "open",
+        "width_m": 3.75,
+        "crasar_labels": [],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "4057276755-4057276774-0",
+        "crasar": "blocked",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Partial Obstruction",
+          "Particulate Total",
+          "Total Obstruction"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "4058598945-10052533591-0",
+        "crasar": "clear",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Particulate Partial",
+          "Particulate Total"
+        ],
+        "drone_recon": true
+      },
+      {
+        "edge_id": "10052490567-10052490573-0",
+        "crasar": "blocked",
+        "sam": "blocked",
+        "width_m": 0.0,
+        "crasar_labels": [
+          "Particulate Partial",
+          "Particulate Total",
+          "Total Obstruction"
+        ],
+        "drone_recon": true
+      }
+    ]
+  }
+}

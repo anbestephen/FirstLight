@@ -135,6 +135,28 @@ Two open-weights models were scored on the same 38 held-out test buildings, usin
 
 Reproduce: `./.venv/bin/python benchmarks/edge_model_comparison.py` → [`benchmarks/edge_model_comparison.json`](benchmarks/edge_model_comparison.json) (about 50 min).
 
+### Independent check: CRASAR drone labels
+
+[CRASAR-U-DROIDs](https://huggingface.co/datasets/CRASAR/CRASAR-U-DROIDs) (Center for Robot-Assisted Search and Rescue, CC BY 4.0) includes two drone surveys of Mexico Beach, flown Oct 13 and Oct 14, 2018 at about 2 cm per pixel. Its expert annotators labelled building damage (same xBD scale) and road conditions along OpenStreetMap roads. FirstLight never sees this data: our grades and widths come from the Oct 11 NOAA image at 0.28 m per pixel.
+
+| Check | Result |
+| :--- | :--- |
+| Roads CRASAR marks **totally blocked** (19 of the 100 roads both cover) | SAM 3.1 had closed **18** of them to ambulances (95 %) |
+| Roads SAM 3.1 calls **open to fire engines** (41) | CRASAR marks **1** as totally blocked |
+| Roads SAM 3.1 blocks but CRASAR saw clear (18) | **14** were already flagged for drone recon (mostly sand or no visible pavement) |
+| Muse Spark building grades vs CRASAR drone labels (236 matched buildings) | within one class **80 %**, exact 34 %, high-severity precision 0.64 / recall 0.44 |
+| Our own hand labels vs CRASAR drone labels (59 buildings) | within one class 90 %, exact 44 % |
+
+- **Read the building rows together:** even careful human labels made from the NOAA image match drone-based labels exactly only 44 % of the time. Exact grades are limited by the image, not just the model, and CRASAR has reported that lower-resolution imagery under-reports damage.
+- **Method:**
+  - Buildings are matched by footprint overlap (IoU ≥ 0.3).
+  - Roads count as covered when CRASAR's road lines run along at least 80 % of them.
+  - Labels in the 8 m at each road end are ignored, because they belong to the crossing street; road stubs under 24 m are skipped.
+  - "Total" obstruction, destruction or flooding counts as blocked.
+- **Caveat:** the drone flights were two to three days after the NOAA photo, so some roads may already have been partly cleared.
+
+Reproduce: `./.venv/bin/python benchmarks/crasar_validation.py` → [`benchmarks/crasar_validation.json`](benchmarks/crasar_validation.json).
+
 ## Limitations
 
 - **Sand-covered pavement:** SAM can confidently read it as clear road (3 false-passables on dev).
@@ -252,5 +274,6 @@ docs/img/           Screenshots
 - **Meta Model API** (`muse-spark-1.3`, `muse-voice-transcribe-1.0`, `muse-wonder-1.0`, `muse-image-1.0`): used under the Meta Global AI Developer Hackathon terms.
 - **Map data © OpenStreetMap contributors,** available under the Open Database License (ODbL).
 - **NOAA National Geodetic Survey:** Hurricane Michael emergency response imagery (Oct 11, 2018). U.S. Government work, public domain.
+- **CRASAR-U-DROIDs** (Center for Robot-Assisted Search and Rescue): Mexico Beach drone damage labels in `data/external/crasar/`, used only for evaluation. CC BY 4.0.
 - **USDA NAIP 2017 imagery,** via Microsoft Planetary Computer. Public domain.
 - **Leaflet 1.9.4** (BSD-2-Clause), vendored in `ui/vendor/`.
