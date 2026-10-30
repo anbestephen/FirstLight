@@ -20,6 +20,7 @@ Damage maps (xView2, Microsoft and others) show *what* is destroyed. After a hur
 | **Vehicle-specific routing** | ATV needs > 1.2 m, ambulance > 2.2 m, fire engine > 3.5 m; standing water closes a road for everyone; ambulances and fire engines stay off footways. |
 | **Building damage from before/after imagery** | Muse Spark grades all 334 buildings from a 2017 (before) / 2018 (after) image pair. |
 | **What to clear first** | Ranks debris piles by severely damaged buildings unlocked per m² cleared. For a block no vehicle can reach, finds the set of segments with the least total debris whose clearance opens a route, and says which need drone recon first. |
+| **Drone check for uncertain roads** | Roads flagged "drone check advised" can be re-measured with the same SAM 3.1 instrument on real drone imagery of Mexico Beach (CRASAR, about 1.8x sharper), and the routes update live. |
 | **Commander agent with verified answers** | Ask in plain language. Muse Spark calls deterministic tools, and **every number in its answer is checked against the tool results**. |
 | **Three-tier failover** | Meta Cloud (Muse Spark) → Muse Glimmer 30B on the laptop (MLX, 4-bit) → no-model geometry and routing. The map never goes dark. |
 | **Live field phones over local Wi-Fi** | Phones follow the commander's dispatch in real time and detect internet loss within about 5 s. |
@@ -157,6 +158,32 @@ Reproduce: `./.venv/bin/python benchmarks/edge_model_comparison.py` → [`benchm
 
 Reproduce: `./.venv/bin/python benchmarks/crasar_validation.py` → [`benchmarks/crasar_validation.json`](benchmarks/crasar_validation.json).
 
+### Drone check: re-measuring flagged roads
+
+The NOAA image flags 80 roads "drone check advised" (no visible pavement, sand, or low confidence). In the field a crew would fly a drone over them. FirstLight shows what that step does with drone imagery that already exists: CRASAR's Oct 13 and Oct 14 orthomosaics.
+
+- **How:**
+  - only a patch around each road is read, over HTTP from the internal overviews, at about 0.16 m per pixel;
+  - SAM 3.1 segments it with the same prompts, and the same 5 m cross-sections measure it;
+  - roads are measured once offline (`scripts/drone_remeasure.py`) and stored in `data/sam31_drone_measurements.json`;
+  - in the dashboard, **Drone check** in the road inspector applies a road's drone measurement. The routes, the KPIs and the field phones update, and **Undo drone checks** restores the NOAA measurements.
+- **Coverage:** 74 of the 80 roads have full drone coverage; 6 are skipped because the flights cover only 0–96 % of them.
+- **Rule:**
+  - on the NOAA image, an obstruction must persist over two cross-sections to close a road (noise suppression at 0.28 m per pixel);
+  - on drone imagery, one narrow cross-section is enough.
+- **What changes:** 13 roads open to ambulances, 16 to fire engines and 15 to ATVs; 38 of the 74 still advise a closer look.
+
+| Against CRASAR's road labels (100 roads) | NOAA only | After all drone checks |
+| :--- | :--- | :--- |
+| CRASAR **totally blocked** roads (19) kept closed to ambulances | 18 | **18** |
+| Roads SAM 3.1 blocks but CRASAR saw clear | 18 | **11** |
+| Roads open to fire engines (CRASAR totally blocked among them) | 41 (1) | **50 (1)** |
+
+- **Disclosure:** the one-cross-section rule was chosen after comparing it with CRASAR's road labels. The two-cross-section rule removed more false blockages (18 → 7) but opened 2 roads CRASAR marks totally blocked. We kept the rule that loses no blocked road, so this table is not a blind test.
+- **Same caveat as above:** the drone flights were two to three days after the NOAA photo, so roads may have been partly cleared in between.
+
+Reproduce: `./.venv/bin/python scripts/drone_remeasure.py` (needs the internet; reads road patches from Hugging Face and caches them in `data/drone_cache/`), then `benchmarks/crasar_validation.py` (`roads_after_drone_checks`).
+
 ## Limitations
 
 - **Sand-covered pavement:** SAM can confidently read it as clear road (3 false-passables on dev).
@@ -198,6 +225,7 @@ Rebuild the derived data (all offline after the first download):
 | `scripts/fetch_pre_event_naip.py` | `data/naip_2017_mexico_beach.tif` (before image) |
 | `scripts/bake_sam31_masks.py` | SAM 3.1 probabilities, masks and road measurements (`--remeasure` reuses the probabilities) |
 | `scripts/grade_buildings_muse_spark.py` | Muse Spark building grades (cached and resumable; about $1 of API credit for all 334) |
+| `scripts/drone_remeasure.py` | SAM 3.1 drone re-measurements of flagged roads (`--rederive` recomputes verdicts from stored cross-sections) |
 | `scripts/build_map_tiles.py` | Full-resolution offline map tiles |
 | `scripts/make_benchmark_samples.py` | Held-out label samples (`--set test` for the final set) |
 
@@ -236,7 +264,8 @@ Building opened when the kickoff ended, at 12:24 PM ET on Oct 26, 2026, and runs
   - Muse Glimmer 30B replacing Llama 3.2 Vision as the offline tier after a held-out comparison (Oct 28);
   - push-to-talk questions through Muse Voice Transcribe, replacing a preset-command placeholder (Oct 29);
   - least-debris clearance paths to blocks no vehicle can reach (Oct 29);
-  - redesigned commander dashboard and field view: KPI cards, side panels, a Meta models panel and a road inspector (Oct 29).
+  - redesigned commander dashboard and field view: KPI cards, side panels, a Meta models panel and a road inspector (Oct 29);
+  - independent check against CRASAR drone labels, and drone re-measurement of flagged roads (Oct 30).
 
 ---
 
@@ -274,6 +303,8 @@ docs/img/           Screenshots
 - **Meta Model API** (`muse-spark-1.3`, `muse-voice-transcribe-1.0`, `muse-wonder-1.0`, `muse-image-1.0`): used under the Meta Global AI Developer Hackathon terms.
 - **Map data © OpenStreetMap contributors,** available under the Open Database License (ODbL).
 - **NOAA National Geodetic Survey:** Hurricane Michael emergency response imagery (Oct 11, 2018). U.S. Government work, public domain.
-- **CRASAR-U-DROIDs** (Center for Robot-Assisted Search and Rescue): Mexico Beach drone damage labels in `data/external/crasar/`, used only for evaluation. CC BY 4.0.
+- **CRASAR-U-DROIDs** (Center for Robot-Assisted Search and Rescue), CC BY 4.0:
+  - Mexico Beach drone damage labels in `data/external/crasar/`, used only for evaluation;
+  - patches of the Oct 13 and Oct 14, 2018 drone orthomosaics, re-measured with SAM 3.1 (`data/sam31_drone_measurements.json`).
 - **USDA NAIP 2017 imagery,** via Microsoft Planetary Computer. Public domain.
 - **Leaflet 1.9.4** (BSD-2-Clause), vendored in `ui/vendor/`.
