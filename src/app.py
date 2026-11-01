@@ -729,6 +729,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+UI_PATHS = {"/", "/app.js", "/style.css", "/field", "/field.js", "/field.css", "/label"}
+
+
+class RevalidateUIMiddleware:
+    """Make browsers re-check the dashboard and field files so a reload always picks up UI changes."""
+
+    def __init__(self, app_: Any) -> None:
+        self.app = app_
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        path = scope.get("path", "")
+        if scope["type"] != "http" or not (path in UI_PATHS or path.startswith("/ui/")):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_header(message: dict) -> None:
+            if message["type"] == "http.response.start":
+                message["headers"] = [*message.get("headers", []), (b"cache-control", b"no-cache")]
+            await send(message)
+
+        await self.app(scope, receive, send_with_header)
+
+
+app.add_middleware(RevalidateUIMiddleware)
+
 app.include_router(labeling_router)
 
 TILES_DIR = DATA_DIR / "tiles"

@@ -368,7 +368,11 @@ def test_unnamed_segments_get_names_from_connected_streets() -> None:
     G.add_edge(3, 4, key=0, name="US Highway 98")
     G.add_edge(5, 6, key=0)  # isolated, no named neighbours
     G.add_edge(2, 7, key=0)  # unnamed spur off 26th Street only
+    G.add_edge(8, 9, key=0, ref="US 98")  # route number only
+    G.add_edge(9, 10, key=0)  # spur off it
     assign_display_names(G)
+    assert G[8][9][0]["display_name"] == "US 98"
+    assert G[9][10][0]["display_name"] == "unnamed road off US 98"
     assert G[2][3][0]["display_name"] == "unnamed road between 26th Street and US Highway 98"
     assert G[2][7][0]["display_name"] == "unnamed road off 26th Street"
     assert G[5][6][0]["display_name"] == "unnamed road"

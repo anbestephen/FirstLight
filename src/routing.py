@@ -517,18 +517,23 @@ def _format_edge_name(
 def assign_display_names(G: nx.MultiDiGraph) -> None:
     """
     Name each unnamed OSM segment after the named streets it connects to, so responders see
-    "unnamed road off 26th Street" (or "between A and B") instead of node ids.
+    "unnamed road off 26th Street" (or "between A and B") instead of node ids. Roads with only a
+    route number (Mexico Beach's beachfront highway is tagged `ref=US 98`, no name) use that.
     """
     def named_at(node: Any) -> list[str]:
         names: list[str] = []
         for a, b, d in list(G.out_edges(node, data=True)) + list(G.in_edges(node, data=True)):
-            n = _raw_road_name(d.get("name"))
+            n = _raw_road_name(d.get("name")) or _raw_road_name(d.get("ref"))
             if n and n not in names:
                 names.append(n)
         return names
 
     for u, v, data in G.edges(data=True):
         if _raw_road_name(data.get("name")):
+            continue
+        ref = _raw_road_name(data.get("ref"))
+        if ref:
+            data["display_name"] = ref
             continue
         neighbours: list[str] = []
         for n in named_at(u) + named_at(v):

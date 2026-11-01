@@ -1,12 +1,13 @@
 // Street-name labels for the dashboard and field maps (offline: names come from the OSM road layer).
-// Each named street is labelled along its longest segments, at least LABEL_SPACING_M apart, rotated
-// to the road and shown only from MIN_ZOOM so the overview stays readable.
+// Each named street is labelled along its longest segments, rotated to the road. Labels get denser
+// as you zoom in (SPACING_BY_ZOOM) and are hidden below MIN_ZOOM so the overview stays readable.
 (function () {
   "use strict";
 
   const MIN_ZOOM = 16;
   const MIN_SEGMENT_M = 40;
-  const LABEL_SPACING_M = 250;
+  const SPACING_BY_ZOOM = { 16: 250, 17: 150, 18: 80 }; // metres between labels of one street
+  const MIN_SPACING_M = 45;
   const M_PER_DEG = 111320;
 
   function streetName(raw) {
@@ -48,7 +49,7 @@
     return null;
   }
 
-  function placements(features) {
+  function placements(features, spacingM) {
     const candidates = [];
     features.forEach(function (feature) {
       const name = streetName(feature.properties && feature.properties.name);
@@ -65,7 +66,7 @@
       const tooClose = placed.some(function (p) {
         const dLat = (p.latLng[0] - c.latLng[0]) * M_PER_DEG;
         const dLon = (p.latLng[1] - c.latLng[1]) * M_PER_DEG * Math.cos((c.latLng[0] * Math.PI) / 180);
-        return p.name === c.name && Math.hypot(dLat, dLon) < LABEL_SPACING_M;
+        return p.name === c.name && Math.hypot(dLat, dLon) < spacingM;
       });
       if (!tooClose) placed.push(c);
     });
@@ -78,7 +79,7 @@
     });
   }
 
-  // Returns a layer group that adds itself to the map at MIN_ZOOM and above.
+  // Returns a layer group that shows on the map at MIN_ZOOM and above, re-spaced on each zoom.
   function create(map, features) {
     if (!map.getPane("streetLabels")) {
       const pane = map.createPane("streetLabels");
@@ -86,20 +87,30 @@
       pane.style.pointerEvents = "none";
     }
     const group = L.layerGroup();
-    placements(features).forEach(function (p) {
-      L.marker(p.latLng, {
-        pane: "streetLabels",
-        interactive: false,
-        keyboard: false,
-        icon: L.divIcon({
-          className: "street-label",
-          html: `<span style="transform: translate(-50%, -50%) rotate(${p.angle.toFixed(1)}deg)">${escapeText(p.name)}</span>`,
-          iconSize: [0, 0],
-        }),
-      }).addTo(group);
-    });
+    let shownSpacing = null;
+    function fill(spacingM) {
+      group.clearLayers();
+      placements(features, spacingM).forEach(function (p) {
+        L.marker(p.latLng, {
+          pane: "streetLabels",
+          interactive: false,
+          keyboard: false,
+          icon: L.divIcon({
+            className: "street-label",
+            html: `<span style="transform: translate(-50%, -50%) rotate(${p.angle.toFixed(1)}deg)">${escapeText(p.name)}</span>`,
+            iconSize: [0, 0],
+          }),
+        }).addTo(group);
+      });
+    }
     function sync() {
-      const show = map.getZoom() >= MIN_ZOOM;
+      const zoom = Math.floor(map.getZoom());
+      const show = zoom >= MIN_ZOOM;
+      const spacing = SPACING_BY_ZOOM[zoom] || MIN_SPACING_M;
+      if (show && spacing !== shownSpacing) {
+        fill(spacing);
+        shownSpacing = spacing;
+      }
       if (show && !map.hasLayer(group)) group.addTo(map);
       if (!show && map.hasLayer(group)) map.removeLayer(group);
     }
