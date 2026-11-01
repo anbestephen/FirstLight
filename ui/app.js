@@ -9,6 +9,7 @@
   const state = {
     vehicleClass: "fire_engine",
     forceOffline: false,
+    uplinkOnline: null, // measured by the server's internet probe (null until known)
     showCaliperRays: true,
     origin: null,
     destination: null,
@@ -163,7 +164,7 @@
 
       setNetworkStatus();
       const tiers = data.vlm_tiers || {};
-      setAiPill(state.forceOffline ? "tier_2" : tiers.active_tier);
+      setAiPill(state.forceOffline || state.uplinkOnline === false ? "tier_2" : tiers.active_tier);
 
       const gsd = data.geospatial ? data.geospatial.gsd_m_per_px : 0.2804;
       document.getElementById("hw-status-badge").textContent =
@@ -178,9 +179,11 @@
   function setNetworkStatus() {
     const dot = document.getElementById("network-status-dot");
     const text = document.getElementById("network-status-text");
-    dot.classList.toggle("online", !state.forceOffline);
-    dot.classList.toggle("offline", state.forceOffline);
-    text.textContent = state.forceOffline ? "Blackout · on-device" : "Online";
+    const lost = state.uplinkOnline === false;
+    const offline = state.forceOffline || lost;
+    dot.classList.toggle("online", !offline);
+    dot.classList.toggle("offline", offline);
+    text.textContent = state.forceOffline ? "Blackout · on-device" : lost ? "Internet lost · on-device" : "Online";
   }
 
   // Warm-up loads Muse Glimmer and pre-grades the top choke points; returns true when finished.
@@ -933,7 +936,22 @@
       } catch (err) {
         return;
       }
-      const count = (snapshot.connectivity && snapshot.connectivity.field_clients) || 0;
+      const conn = snapshot.connectivity || {};
+      // Real internet loss (the server probes the Meta API host): show it like the field phones do.
+      if (conn.uplink_online !== undefined && conn.uplink_online !== state.uplinkOnline) {
+        const wasKnown = state.uplinkOnline !== null;
+        state.uplinkOnline = conn.uplink_online;
+        setNetworkStatus();
+        setAiPill(state.forceOffline || state.uplinkOnline === false ? "tier_2" : "tier_1");
+        if (wasKnown) {
+          showToast(
+            state.uplinkOnline
+              ? "Internet restored · AI back on Meta Cloud"
+              : "Internet lost · AI now runs on this laptop; field phones stay live over Wi-Fi"
+          );
+        }
+      }
+      const count = conn.field_clients || 0;
       pill.classList.toggle("live", count > 0);
       textEl.textContent = `${count} field device${count === 1 ? "" : "s"}`;
       pill.title = snapshot.field_url
