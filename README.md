@@ -42,7 +42,7 @@ Damage maps (xView2, Microsoft and others) show *what* is destroyed. After a hur
 | **Muse Glimmer 30B, 4-bit** (open weights) | Locally on Apple Silicon (MLX) | Offline fallback for grading and for the agent (same tools via a JSON action protocol). Kept resident in memory. Grades with low reasoning; agent steps skip reasoning, since every number is verified against tool output anyway. Chosen over Llama 3.2 11B Vision on the held-out test set ([comparison](#offline-model-choice)). |
 | **Muse Voice Transcribe 1.0** (`muse-voice-transcribe-1.0`) | Meta Model API (realtime WebSocket) | Push-to-talk questions to the commander agent. The dashboard streams microphone audio through the laptop (the API key never reaches the browser), and the words appear as they are recognised. The final transcript arrives about 0.25 s after release. It needs the internet; when the link is down the dashboard says to type instead. |
 
-Experimental integrations (in the UI, not part of the core demo): **Muse Wonder 1.0** incident briefing and **Muse Image 1.0** recon schematic. Each labels its output with the model or fallback that produced it.
+Experimental integration (in the UI, not part of the core demo): **Muse Wonder 1.0** incident briefing. It labels its output with the model or fallback that produced it.
 
 ---
 
@@ -300,7 +300,7 @@ docs/img/           Screenshots
 - **Muse Glimmer 30B:** the offline tier uses `mlx-community/Muse-Glimmer-30B-4bit` (Apache 2.0).
 - **Built with Llama.** The offline-model comparison also runs `mlx-community/Llama-3.2-11B-Vision-Instruct-4bit`, licensed under the Llama 3.2 Community License, Copyright © Meta Platforms, Inc. All Rights Reserved.
 - **SAM 3.1:** Meta Platforms, Inc., under the SAM License (weights in `models/sam3.1`, transformers `Sam3Model` format).
-- **Meta Model API** (`muse-spark-1.3`, `muse-voice-transcribe-1.0`, `muse-wonder-1.0`, `muse-image-1.0`): used under the Meta Global AI Developer Hackathon terms.
+- **Meta Model API** (`muse-spark-1.3`, `muse-voice-transcribe-1.0`, `muse-wonder-1.0`): used under the Meta Global AI Developer Hackathon terms.
 - **Map data © OpenStreetMap contributors,** available under the Open Database License (ODbL).
 - **NOAA National Geodetic Survey:** Hurricane Michael emergency response imagery (Oct 11, 2018). U.S. Government work, public domain.
 - **CRASAR-U-DROIDs** (Center for Robot-Assisted Search and Rescue), CC BY 4.0:

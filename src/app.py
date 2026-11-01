@@ -49,6 +49,7 @@ from src.geometry import (
     compute_raster_gsd_and_crs,
     extract_corridor_aerial_crop_png,
     load_sam31_masks_utm,
+    render_cross_section_overlay_png,
 )
 from src.labeling import router as labeling_router
 from src.routing import (
@@ -1248,48 +1249,26 @@ def post_drone_reset() -> dict[str, Any]:
 
 
 @app.get("/api/choke-point/{edge_id}/recon-schematic.png")
-def get_choke_point_recon_schematic_png(
-    edge_id: str,
-    force_offline: bool = Query(default=False),
-) -> Response:
+def get_choke_point_recon_schematic_png(edge_id: str) -> Response:
     """
-    Generate a 256x256 tactical clearance recon schematic for `edge_id` via `muse-image`
-    (with offline/air-gapped high-contrast SAM 3.1 + 5m orthogonal caliper schematic overlay).
+    The road's SAM 3.1 cross-sections drawn on the image they were measured from (NOAA, or the
+    drone patch after a drone check): clear spans coloured by vehicle, the narrowest one labelled.
     """
     state.ensure_loaded()
-    assert state.raster_meta is not None
-    u, v, k, edata = state.resolve_edge_by_id(edge_id)
-    lon, lat = state.get_edge_midpoint_lonlat(u, v, edata)
-    crop_bytes = extract_corridor_aerial_crop_png(
-        RASTER_TIF_PATH, lon=lon, lat=lat, size_px=256
-    )
-
-    raw_name = edata.get("name")
-    if isinstance(raw_name, list):
-        road_name = ", ".join(str(x) for x in raw_name if x)
-    elif raw_name is not None and not (
-        isinstance(raw_name, float) and math.isnan(raw_name)
-    ):
-        road_name = str(raw_name)
-    else:
-        road_name = str(edata.get("display_name") or "unnamed road")
-
-    schematic_bytes = state.meta_suite.generate_recon_schematic_png(
-        crop_bytes,
-        edge_id=f"{u}-{v}-{k}",
-        road_name=road_name,
-        min_clear_width_m=float(edata.get("min_clear_width_m", 8.0)),
-        nominal_width_m=float(edata.get("nominal_width_m", 8.0)),
-        debris_area_sqm=float(edata.get("debris_area_sqm", 0.0)),
-        water_overlap_ratio=float(edata.get("water_overlap_ratio", 0.0)),
-        gsd_m_per_px=float(edata.get("gsd_m_per_px", state.raster_meta["gsd_m_per_px"])),
-        force_offline=force_offline,
-    )
-    meta_headers = {
-        "X-Schematic-Label": str(state.meta_suite.last_schematic_meta.get("label", "Deterministic Caliper Overlay (Muse Image Offline)")),
-        "X-Tier-Used": str(state.meta_suite.last_schematic_meta.get("tier_used", ConnectivityTier.TIER_3_DETERMINISTIC.value)),
-    }
-    return Response(content=schematic_bytes, media_type="image/png", headers=meta_headers)
+    u, v, k, _ = state.resolve_edge_by_id(edge_id)
+    eid = f"{u}-{v}-{k}"
+    record = (state.sam_measurements or {}).get("edges", {}).get(eid)
+    if not record or not record.get("stations"):
+        raise HTTPException(status_code=404, detail=f"road {eid} has no SAM 3.1 measurement")
+    source = RASTER_TIF_PATH
+    if record.get("measurement_source") == "drone":
+        for cached in (DRONE_CACHE_DIR / f"{eid}.tif", DRONE_CACHE_DIR / f"{v}-{u}-{k}.tif"):
+            if cached.exists():
+                source = cached
+                break
+        else:
+            raise HTTPException(status_code=404, detail="drone image for this road is not cached locally")
+    return Response(content=render_cross_section_overlay_png(source, record), media_type="image/png")
 
 
 @app.get("/api/situation")
@@ -1304,7 +1283,7 @@ def get_meta_models(
 ) -> dict[str, Any]:
     """
     Return live readiness, model IDs (`sam-3.1`, `muse-spark`, `muse-wonder`,
-    `muse-voice-transcribe`, `muse-image`, `open-weight-mlx-4bit`), latency telemetry,
+    `muse-voice-transcribe`, `open-weight-mlx-4bit`), latency telemetry,
     and invocation call counts.
     """
     state.ensure_loaded()
@@ -1442,11 +1421,6 @@ async def post_assess(req: AssessRequest) -> dict[str, Any]:
         f"/api/choke-point/{resolved_edge_id}/recon-schematic.png"
         if resolved_edge_id
         else None
-    )
-    payload["schematic_label"] = (
-        "Muse Image 1.0 Recon Schematic"
-        if (bool(state.router.api_key) and not req.force_offline)
-        else "Deterministic Caliper Overlay (Muse Image Offline)"
     )
     payload["memory_cleared"] = True
     payload["unified_memory_stats"] = mem_stats

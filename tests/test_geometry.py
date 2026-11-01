@@ -23,6 +23,7 @@ from src.geometry import (
     compute_raster_gsd_and_crs,
     extract_corridor_aerial_crop_png,
     load_sam31_masks_utm,
+    render_cross_section_overlay_png,
 )
 
 
@@ -123,3 +124,24 @@ def test_real_sam31_checkpoint_loads_in_fp16_when_present() -> None:
     assert instrument.device in ("mps", "cpu")
     instrument.unload_weights()
     assert instrument.model is None
+
+
+def test_cross_section_overlay_draws_each_measured_span_where_it_was_measured(tmp_path: Path) -> None:
+    path = _write_raster(tmp_path / "utm.tif", TARGET_METRIC_CRS, from_origin(652000, 3315050, 0.25, 0.25), size=200)
+    y = 3315025.0
+    stations = []
+    for i, x in enumerate(range(652010, 652041, 5)):
+        width = 0.0 if x == 652030 else 4.0
+        stations.append({
+            "station_m": 5.0 * i, "center_utm": [x, y], "ray_utm": [[x, y - 15], [x, y + 15]],
+            "clear_segment_utm": [[x, y - 2], [x, y + 2]] if width else None,
+            "clear_width_m": width, "cause": "debris" if width == 0 else "clear",
+        })
+    png = render_cross_section_overlay_png(path, {"stations": stations, "pinch_station_m": 20.0}, size_px=384)
+    img = Image.open(io.BytesIO(png)).convert("RGB")
+    assert img.size == (384, 384)
+    # Frame: 30 m of rays + 2 x 4 m margin = 38 m square centred on (652025, y).
+    to_px = lambda ux, uy: (round((ux - 652006) / 38 * 384), round((y + 19 - uy) / 38 * 384))  # noqa: E731
+    assert img.getpixel(to_px(652020, y + 1)) == (16, 185, 129)  # 4 m span: green, fire engines pass
+    dot_x, dot_y = to_px(652030, y)
+    assert img.getpixel((dot_x - 2, dot_y)) == (249, 115, 22)  # no clear span: orange debris dot

@@ -303,8 +303,8 @@ def test_zero_cdn_static_asset_integrity_and_milestone5_controls() -> None:
 def test_milestone6_meta_models_briefing_and_schematic_endpoints() -> None:
     """
     Verify Milestone 6 endpoints (`GET /api/meta-models`, `POST /api/incident-briefing`,
-    and `GET /api/choke-point/{edge_id}/recon-schematic.png`)
-    in both normal (`force_offline=False`) and Comms Blackout (`force_offline=True`) modes.
+    and `GET /api/choke-point/{edge_id}/recon-schematic.png`); the first two in both normal
+    (`force_offline=False`) and Comms Blackout (`force_offline=True`) modes.
     """
     # 1. GET /api/meta-models
     for offline_flag in (False, True):
@@ -312,14 +312,13 @@ def test_milestone6_meta_models_briefing_and_schematic_endpoints() -> None:
         assert m_res.status_code == 200
         m_data = m_res.json()
         assert m_data["force_offline"] is offline_flag
-        assert m_data["total_models"] == 6
+        assert m_data["total_models"] == 5
         returned_ids = [m["model_id"] for m in m_data["models"]]
         assert returned_ids == [
             "sam-3.1",
             "muse-spark-1.3",
             "muse-wonder-1.0",
             "muse-voice-transcribe-1.0",
-            "muse-image-1.0",
             "open-weight-mlx-4bit",
         ]
 
@@ -344,25 +343,14 @@ def test_milestone6_meta_models_briefing_and_schematic_endpoints() -> None:
             assert "[DETERMINISTIC GEOMETRIC TRIAGE — NO LLM EXECUTED]" in b_data["executive_summary"]
         assert b_data["memory_cleared"] is True
 
-    # 3. GET /api/choke-point/{edge_id}/recon-schematic.png (muse-image-1.0)
+    # 3. GET /api/choke-point/{edge_id}/recon-schematic.png (stored SAM 3.1 cross-sections, no model call)
     roi_res = client.get("/api/clearance-roi?vehicle_class=fire_engine")
     top_rec = roi_res.json()["recommendations"][0]
     edge_id = f"{top_rec['edge_u']}-{top_rec['edge_v']}-{top_rec['edge_key']}"
-
-    for offline_flag in (False, True):
-        s_res = client.get(
-            f"/api/choke-point/{edge_id}/recon-schematic.png?force_offline={str(offline_flag).lower()}"
-        )
-        assert s_res.status_code == 200
-        assert s_res.headers["content-type"] == "image/png"
-        if offline_flag:
-            assert (
-                s_res.headers.get("x-schematic-label")
-                == "Deterministic Caliper Overlay (Muse Image Offline)"
-            )
-        assert s_res.content[:8] == b"\x89PNG\r\n\x1a\n"
-        img = Image.open(io.BytesIO(s_res.content))
-        assert img.size == (256, 256)
+    s_res = client.get(f"/api/choke-point/{edge_id}/recon-schematic.png")
+    assert s_res.status_code == 200
+    assert s_res.headers["content-type"] == "image/png"
+    assert Image.open(io.BytesIO(s_res.content)).size == (384, 384)
 
 
 def test_milestone7_benchmark_tiers_and_visual_storytelling_ui() -> None:

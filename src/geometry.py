@@ -303,3 +303,103 @@ def extract_corridor_aerial_crop_png(
         buf = io.BytesIO()
         img.save(buf, format="PNG", optimize=True)
         return buf.getvalue()
+
+
+# Cross-section colours, matching the caliper on the dashboard map.
+_RAY_RED = (239, 68, 68)
+_RAY_AMBER = (245, 158, 11)
+_RAY_GREEN = (16, 185, 129)
+_CAUSE_COLOURS = {"debris": (249, 115, 22), "narrowed_debris": (249, 115, 22), "water": (168, 85, 247)}
+
+
+def _station_colour(clear_width_m: float, cause: str) -> tuple[int, int, int]:
+    if cause == "water" or clear_width_m <= ATV_MIN_WIDTH_M:
+        return _RAY_RED
+    return _RAY_GREEN if clear_width_m > FIRE_ENGINE_MIN_WIDTH_M else _RAY_AMBER
+
+
+def render_cross_section_overlay_png(
+    raster_path: str | Path,
+    record: dict[str, Any],
+    size_px: int = 384,
+    margin_m: float = 4.0,
+) -> bytes:
+    """
+    Draw a road's stored SAM 3.1 cross-sections on the image they were measured from.
+
+    The frame is a square in UTM 16N around every ray, so the road is shown whole and at its true
+    orientation. The centerline is drawn in blue and each ray thin; its measured clear span is drawn thick, coloured by
+    the vehicle it admits (red <= 1.2 m, amber <= 3.5 m, green wider). Stations with no clear span
+    get a dot coloured by cause (orange debris, purple water, grey not visible); the
+    narrowest station is outlined and labelled with its width.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+    from rasterio.transform import from_bounds
+    from rasterio.vrt import WarpedVRT
+
+    stations = record.get("stations") or []
+    xs = [p[0] for st in stations for p in st["ray_utm"]]
+    ys = [p[1] for st in stations for p in st["ray_utm"]]
+    if not xs:
+        raise ValueError("record has no stations")
+    cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+    side = max(max(xs) - min(xs), max(ys) - min(ys)) + 2 * margin_m
+    x0, y1 = cx - side / 2, cy + side / 2
+    transform = from_bounds(x0, cy - side / 2, cx + side / 2, y1, size_px, size_px)
+
+    with rasterio.open(raster_path) as src, WarpedVRT(
+        src, crs=TARGET_METRIC_CRS, transform=transform, width=size_px, height=size_px,
+        resampling=rasterio.enums.Resampling.bilinear,
+    ) as vrt:
+        rgb = np.transpose(vrt.read([1, 2, 3]), (1, 2, 0)).astype(np.uint8)
+    base = Image.fromarray(rgb, mode="RGB").convert("RGBA")
+    base = Image.blend(base, Image.new("RGBA", base.size, (10, 14, 21, 255)), 0.25)  # dim for contrast
+
+    def px(p: Any) -> tuple[float, float]:
+        return ((p[0] - x0) / side * size_px, (y1 - p[1]) / side * size_px)
+
+    overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    pinch_m = float(record.get("pinch_station_m", -1))
+    pinch = None
+    if len(stations) > 1:
+        draw.line([px(st["center_utm"]) for st in stations], fill=(56, 189, 248, 170), width=2)  # centerline
+    for st in stations:
+        width = float(st["clear_width_m"])
+        cause = str(st["cause"])
+        a, b = (px(p) for p in st["ray_utm"])
+        is_pinch = abs(float(st["station_m"]) - pinch_m) < 1e-6
+        draw.line([a, b], fill=(255, 255, 255, 230 if is_pinch else 90), width=2 if is_pinch else 1)
+        seg = st.get("clear_segment_utm")
+        if seg and width > 0:
+            draw.line([px(p) for p in seg], fill=(*_station_colour(width, cause), 255), width=4)
+        else:
+            c = px(st["center_utm"])
+            fill = _CAUSE_COLOURS.get(cause, (148, 163, 184))
+            draw.ellipse([c[0] - 4, c[1] - 4, c[0] + 4, c[1] + 4], fill=(*fill, 255), outline=(255, 255, 255, 220))
+        if is_pinch:
+            pinch = st
+
+    font = ImageFont.load_default(size=13)
+    if pinch is not None:
+        c = px(pinch["center_utm"])
+        label = f"{float(pinch['clear_width_m']):.2f} m"
+        box = draw.textbbox((0, 0), label, font=font)
+        w, h = box[2] - box[0] + 10, box[3] - box[1] + 8
+        lx = min(max(c[0] + 10, 2), size_px - w - 2)
+        ly = min(max(c[1] - h - 10, 2), size_px - h - 2)
+        draw.rounded_rectangle([lx, ly, lx + w, ly + h], radius=4, fill=(10, 14, 21, 225), outline=(255, 255, 255, 200))
+        draw.text((lx + 5, ly + 3 - box[1]), label, font=font, fill=(255, 255, 255, 255))
+
+    # Scale bar: a round number of metres about a fifth of the frame wide.
+    bar_m = next((m for m in (2, 5, 10, 20, 50, 100, 200) if m >= side / 5), 200)
+    bar_px = bar_m / side * size_px
+    y = size_px - 14
+    draw.rectangle([8, y - 14, 18 + bar_px + 40, size_px - 4], fill=(10, 14, 21, 200))
+    draw.line([(12, y), (12 + bar_px, y)], fill=(255, 255, 255, 255), width=2)
+    draw.text((18 + bar_px, y - 8), f"{bar_m} m", font=font, fill=(255, 255, 255, 255))
+
+    out = Image.alpha_composite(base, overlay).convert("RGB")
+    buf = io.BytesIO()
+    out.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()

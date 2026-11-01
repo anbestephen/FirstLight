@@ -235,13 +235,12 @@ def test_severity_synonyms_scores_and_memory_release() -> None:
     assert stats["cleared"] is True and stats["mlx_active_memory_bytes"] >= 0
 
 
-async def test_meta_model_suite_offline_briefing_and_schematic() -> None:
+async def test_meta_model_suite_offline_briefing() -> None:
     suite = MetaModelSuite(VLMFailoverRouter(api_key="k", local_mlx_model_path="models/Muse-Glimmer-30B-4bit"))
     status = suite.get_models_status(force_offline=False)
-    assert status["total_models"] == 6
+    assert status["total_models"] == 5
     assert [m["model_id"] for m in status["models"]] == [
-        "sam-3.1", "muse-spark-1.3", "muse-wonder-1.0", "muse-voice-transcribe-1.0", "muse-image-1.0",
-        "open-weight-mlx-4bit",
+        "sam-3.1", "muse-spark-1.3", "muse-wonder-1.0", "muse-voice-transcribe-1.0", "open-weight-mlx-4bit",
     ]
 
     recs = [{
@@ -254,15 +253,6 @@ async def test_meta_model_suite_offline_briefing_and_schematic() -> None:
     assert "tier_3_deterministic_briefing" in briefing.fallback_chain
     assert briefing.total_structures_unlockable == 6
     assert "[DETERMINISTIC GEOMETRIC TRIAGE — NO LLM EXECUTED]" in briefing.executive_summary
-
-    buf = io.BytesIO()
-    Image.new("RGB", (256, 256), color=(40, 60, 80)).save(buf, format="PNG")
-    png = suite.generate_recon_schematic_png(
-        buf.getvalue(), edge_id="10-20-0", road_name="US Highway 98", min_clear_width_m=2.1,
-        nominal_width_m=8.0, debris_area_sqm=28.4, force_offline=True,
-    )
-    assert png[:8] == b"\x89PNG\r\n\x1a\n" and Image.open(io.BytesIO(png)).size == (256, 256)
-    assert "tier_3_deterministic_caliper_overlay" in suite.last_schematic_meta["fallback_chain"]
 
 
 def test_local_prompt_uses_low_reasoning_and_keeps_only_the_user_message(monkeypatch: pytest.MonkeyPatch) -> None:

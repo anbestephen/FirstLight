@@ -20,7 +20,6 @@
     lastRoiRecommendations: [],
     activeEdgeId: null,
     inspectorViewMode: "crop", // "crop" | "schematic"
-    schematicLabel: "Deterministic Caliper Overlay (Muse Image Offline)",
     highlightedUnlockedNodes: [],
     lastCaliperGeojson: null,
     caliperAnimToken: 0,
@@ -369,10 +368,11 @@
     const captionEl = document.getElementById("inspector-crop-caption");
     const encodedId = encodeURIComponent(state.activeEdgeId);
     if (state.inspectorViewMode === "schematic") {
-      cropImg.src = `/api/choke-point/${encodedId}/recon-schematic.png?force_offline=${Boolean(state.forceOffline)}`;
+      const drone = state.droneImagery && state.droneImagery.edgeId === state.activeEdgeId;
+      cropImg.src = `/api/choke-point/${encodedId}/recon-schematic.png${drone ? "?source=drone" : ""}`;
       if (captionEl) {
         captionEl.textContent =
-          state.schematicLabel || "Deterministic Caliper Overlay (Muse Image Offline)";
+          "SAM 3.1 cuts every 5 m · clear span green > 3.5 m, amber 1.2–3.5 m, red ≤ 1.2 m";
       }
     } else {
       const drone = state.droneImagery && state.droneImagery.edgeId === state.activeEdgeId ? state.droneImagery : null;
@@ -1379,13 +1379,6 @@
       const res = await fetch(`/api/meta-models?force_offline=${Boolean(state.forceOffline)}`);
       if (!res.ok) return;
       const data = await res.json();
-      if (data.schematic_label) {
-        state.schematicLabel = data.schematic_label;
-        const btnSchematic = document.getElementById("btn-view-schematic");
-        if (btnSchematic) {
-          btnSchematic.title = data.schematic_label;
-        }
-      }
       (data.models || []).forEach(function (m) {
         const chip = document.querySelector(`.meta-model-chip[data-model="${m.model_id}"]`);
         if (!chip) return;
@@ -2019,12 +2012,11 @@
         btnSchematic.classList.remove("active");
         updateInspectorImage();
       });
-      btnSchematic.addEventListener("click", async function () {
+      btnSchematic.addEventListener("click", function () {
         state.inspectorViewMode = "schematic";
         btnSchematic.classList.add("active");
         btnCrop.classList.remove("active");
         updateInspectorImage();
-        await refreshMetaModelsTelemetry();
       });
     }
 

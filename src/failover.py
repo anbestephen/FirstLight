@@ -875,13 +875,12 @@ class IncidentBriefingResult(BaseModel):
 
 class MetaModelSuite:
     """
-    Unified orchestrator for the full 6-model Meta AI Disaster Response Suite:
+    Unified orchestrator for the 5-model Meta AI Disaster Response Suite:
       1. `sam-3.1`: Local PyTorch MPS fp16 geometric measurement instrument
       2. `muse-spark-1.3`: Primary visual-language corridor damage & passability grader
       3. `muse-wonder-1.0`: Multi-corridor strategic triage & bulldozer deployment advisor
       4. `muse-voice-transcribe-1.0`: Tactical hands-free radio dispatch transcription & parser
-      5. `muse-image-1.0`: Tactical clearance recon schematic generator
-      6. `open-weight-mlx-4bit`: Local Apple Silicon `Muse-Glimmer-30B-4bit` (`mlx-vlm`)
+      5. `open-weight-mlx-4bit`: Local Apple Silicon `Muse-Glimmer-30B-4bit` (`mlx-vlm`)
     """
 
     MODEL_IDS: tuple[str, ...] = (
@@ -889,7 +888,6 @@ class MetaModelSuite:
         "muse-spark-1.3",
         "muse-wonder-1.0",
         "muse-voice-transcribe-1.0",
-        "muse-image-1.0",
         "open-weight-mlx-4bit",
     )
 
@@ -897,7 +895,6 @@ class MetaModelSuite:
         "muse-spark": "muse-spark-1.3",
         "muse-wonder": "muse-wonder-1.0",
         "muse-voice-transcribe": "muse-voice-transcribe-1.0",
-        "muse-image": "muse-image-1.0",
     }
 
     def __init__(
@@ -908,12 +905,6 @@ class MetaModelSuite:
     ) -> None:
         self.router = router
         self.sam_checkpoint_path = Path(sam_checkpoint_path)
-        self.last_schematic_meta: dict[str, Any] = {
-            "model_id": "muse-image-1.0",
-            "tier_used": ConnectivityTier.TIER_3_DETERMINISTIC.value,
-            "label": "Deterministic Caliper Overlay (Muse Image Offline)",
-            "fallback_chain": [],
-        }
         self._stats: dict[str, dict[str, Any]] = {
             "sam-3.1": {
                 "role": "Orthogonal 5m Cross-Sectional Geometric Caliper (MPS fp16)",
@@ -935,12 +926,6 @@ class MetaModelSuite:
             },
             "muse-voice-transcribe-1.0": {
                 "role": "Push-to-Talk Commander Questions (realtime speech-to-text)",
-                "call_count": 0,
-                "last_latency_ms": 0.0,
-                "last_tier": ConnectivityTier.TIER_3_DETERMINISTIC.value,
-            },
-            "muse-image-1.0": {
-                "role": "Tactical Caliper & SAM 3.1 Recon Schematic Generator",
                 "call_count": 0,
                 "last_latency_ms": 0.0,
                 "last_tier": ConnectivityTier.TIER_3_DETERMINISTIC.value,
@@ -973,7 +958,7 @@ class MetaModelSuite:
             )
 
     def get_models_status(self, force_offline: bool = False) -> dict[str, Any]:
-        """Return live readiness, latency telemetry, and call counts for all 6 Meta models."""
+        """Return live readiness, latency telemetry, and call counts for all 5 Meta models."""
         cloud_configured = bool(self.router.api_key) and not force_offline
         mlx_ready = (self.router.local_mlx_model_path / "config.json").exists()
         sam_ready = self.sam_checkpoint_path.exists()
@@ -1003,11 +988,6 @@ class MetaModelSuite:
                     "ready": ready,
                     "cloud_primary_active": cloud_configured if mid not in ("sam-3.1", "open-weight-mlx-4bit") else False,
                     "offline_fallback_ready": True,
-                    "fallback_label": (
-                        "Deterministic Caliper Overlay (Muse Image Offline)"
-                        if mid == "muse-image-1.0" and not cloud_configured
-                        else None
-                    ),
                     "call_count": st["call_count"],
                     "last_latency_ms": st["last_latency_ms"],
                     "last_tier": st["last_tier"],
@@ -1019,11 +999,6 @@ class MetaModelSuite:
             "api_base_url": self.router.api_base_url,
             "cloud_timeout_s": self.router.cloud_timeout_s,
             "force_offline": force_offline,
-            "schematic_label": (
-                "Muse Image 1.0 Recon Schematic"
-                if cloud_configured
-                else "Deterministic Caliper Overlay (Muse Image Offline)"
-            ),
             "total_models": len(models_payload),
             "models": models_payload,
         }
@@ -1167,185 +1142,3 @@ class MetaModelSuite:
             latency_ms=round(latency_ms, 3),
             memory_cleared=bool(mem_info.get("cleared", True)),
         )
-
-    def generate_recon_schematic_png(
-        self,
-        crop_png_bytes: bytes,
-        *,
-        edge_id: str,
-        road_name: str,
-        min_clear_width_m: float,
-        nominal_width_m: float = 8.0,
-        debris_area_sqm: float = 0.0,
-        water_overlap_ratio: float = 0.0,
-        gsd_m_per_px: float = 0.2804,
-        force_offline: bool = False,
-        http_client: httpx.Client | None = None,
-    ) -> bytes:
-        """
-        Invoke `muse-image-1.0` when online (or synthesize a high-contrast 256x256
-        Deterministic Caliper Overlay using Pillow/Rasterio when offline/air-gapped).
-        """
-        from PIL import ImageDraw
-
-        t0 = time.perf_counter()
-        tier_used = ConnectivityTier.TIER_3_DETERMINISTIC
-        fallback_chain: list[str] = []
-
-        if force_offline:
-            fallback_chain.append("tier_1_cloud_muse_image:bypassed:force_offline")
-        elif self.router.api_key:
-            try:
-                payload = {
-                    "model": "muse-image-1.0",
-                    "prompt": (
-                        f"Tactical disaster reconnaissance schematic for {road_name} (edge {edge_id}): "
-                        f"min clear width {min_clear_width_m:.2f}m of {nominal_width_m:.1f}m corridor, "
-                        f"{debris_area_sqm:.1f} m² debris at {gsd_m_per_px:.4f} m/px GSD."
-                    ),
-                    "size": "256x256",
-                    "response_format": "b64_json",
-                }
-                headers = {
-                    "Authorization": f"Bearer {self.router.api_key}",
-                    "Content-Type": "application/json",
-                }
-                endpoint = f"{self.router.api_base_url}/images/generations"
-                timeout = httpx.Timeout(self.router.cloud_timeout_s)
-                if http_client is not None:
-                    resp = http_client.post(endpoint, json=payload, headers=headers, timeout=timeout)
-                else:
-                    with httpx.Client(timeout=timeout) as client:
-                        resp = client.post(endpoint, json=payload, headers=headers)
-                resp.raise_for_status()
-                b64_data = resp.json()["data"][0]["b64_json"]
-                raw_png = base64.b64decode(b64_data)
-                if raw_png[:8] == b"\x89PNG\r\n\x1a\n":
-                    latency_ms = (time.perf_counter() - t0) * 1000.0
-                    fallback_chain.append("tier_1_cloud_muse_image:success")
-                    self.last_schematic_meta = {
-                        "model_id": "muse-image-1.0",
-                        "tier_used": ConnectivityTier.TIER_1_CLOUD.value,
-                        "label": "Muse Image 1.0 Recon Schematic",
-                        "fallback_chain": fallback_chain,
-                    }
-                    self.record_model_invocation(
-                        "muse-image-1.0", latency_ms, ConnectivityTier.TIER_1_CLOUD.value
-                    )
-                    return raw_png
-            except Exception as exc:
-                fallback_chain.append(_format_cloud_exception("tier_1_cloud_muse_image", exc))
-        else:
-            fallback_chain.append("tier_1_cloud_muse_image:error:MissingApiKey")
-
-        tier_used = ConnectivityTier.TIER_3_DETERMINISTIC
-        fallback_chain.append("tier_3_deterministic_caliper_overlay")
-        self.last_schematic_meta = {
-            "model_id": "muse-image-1.0",
-            "tier_used": tier_used.value,
-            "label": "Deterministic Caliper Overlay (Muse Image Offline)",
-            "fallback_chain": fallback_chain,
-        }
-
-        base_img = Image.open(io.BytesIO(crop_png_bytes)).convert("RGBA")
-        if base_img.size != (256, 256):
-            base_img = base_img.resize((256, 256))
-
-        overlay = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay)
-
-        # 1. Tactical coordinate grid lines
-        for coord in range(32, 256, 32):
-            draw.line([(coord, 26), (coord, 224)], fill=(56, 189, 248, 45), width=1)
-            draw.line([(0, coord), (256, coord)], fill=(56, 189, 248, 45), width=1)
-
-        # 2. Road corridor boundary guides
-        corridor_top = 76
-        corridor_bot = 180
-        draw.line([(16, corridor_top), (240, corridor_top)], fill=(56, 189, 248, 190), width=2)
-        draw.line([(16, corridor_bot), (240, corridor_bot)], fill=(56, 189, 248, 190), width=2)
-
-        # 3. SAM 3.1 Debris / Water obstacle polygon overlay proportional to blockage ratio
-        block_ratio = max(
-            0.0,
-            min(1.0, 1.0 - (float(min_clear_width_m) / max(float(nominal_width_m), 1.0))),
-        )
-        corridor_px = corridor_bot - corridor_top
-        blocked_px = int(round(corridor_px * block_ratio))
-
-        if water_overlap_ratio > 0.0:
-            draw.rectangle(
-                [84, corridor_top - 6, 172, corridor_bot + 6],
-                fill=(168, 85, 247, 145),
-                outline=(216, 180, 254, 240),
-                width=2,
-            )
-        elif blocked_px > 4:
-            debris_bottom = corridor_top + blocked_px
-            draw.polygon(
-                [
-                    (92, corridor_top),
-                    (168, corridor_top),
-                    (176, debris_bottom),
-                    (86, debris_bottom),
-                ],
-                fill=(249, 115, 22, 155),
-                outline=(239, 68, 68, 245),
-            )
-
-        # 4. Orthogonal 5.0m cross-section caliper rays along corridor
-        for x_pos in (44, 76, 108, 130, 154, 186, 216):
-            is_pinch = x_pos == 130
-            if is_pinch:
-                # Red pinch-point caliper ray + clear span indicator
-                clear_top = corridor_top + blocked_px
-                draw.line(
-                    [(x_pos, corridor_top), (x_pos, clear_top)],
-                    fill=(239, 68, 68, 255),
-                    width=3,
-                )
-                draw.line(
-                    [(x_pos, clear_top), (x_pos, corridor_bot)],
-                    fill=(16, 185, 129, 255),
-                    width=4,
-                )
-                draw.ellipse(
-                    [x_pos - 4, clear_top - 4, x_pos + 4, clear_top + 4],
-                    fill=(239, 68, 68, 255),
-                    outline=(255, 255, 255, 255),
-                )
-            else:
-                draw.line(
-                    [(x_pos, corridor_top), (x_pos, corridor_bot)],
-                    fill=(16, 185, 129, 185),
-                    width=2,
-                )
-
-        # 5. Top & Bottom Tactical Telemetry HUD Bars (Honest Deterministic Attribution)
-        draw.rectangle([0, 0, 256, 24], fill=(11, 17, 32, 225))
-        draw.text(
-            (6, 6),
-            f"DETERMINISTIC CALIPER OVERLAY | {road_name[:12]}",
-            fill=(56, 189, 248, 255),
-        )
-
-        draw.rectangle([0, 226, 256, 256], fill=(11, 17, 32, 230))
-        status_tag = (
-            "WATER=INF"
-            if water_overlap_ratio > 0.0
-            else f"SPAN:{min_clear_width_m:.2f}m DEBRIS:{debris_area_sqm:.1f}m2"
-        )
-        draw.text(
-            (6, 234),
-            f"{status_tag} @ {gsd_m_per_px:.4f}m/px",
-            fill=(248, 250, 252, 255),
-        )
-
-        composed = Image.alpha_composite(base_img, overlay).convert("RGB")
-        buf = io.BytesIO()
-        composed.save(buf, format="PNG", optimize=True)
-
-        latency_ms = (time.perf_counter() - t0) * 1000.0
-        self.record_model_invocation("muse-image-1.0", latency_ms, tier_used.value)
-        return buf.getvalue()
-
