@@ -219,6 +219,7 @@
     const data = await res.json();
 
     state.roadsGeojson = data.roads;
+    window.FirstLightStreetLabels.create(state.map, (data.roads && data.roads.features) || []);
     state.buildingsGeojson = data.buildings;
     state.boundsWgs84 = data.bounds_wgs84 || state.boundsWgs84;
     state.clearedEdges = data.cleared_edges || [];

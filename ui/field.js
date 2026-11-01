@@ -115,6 +115,7 @@
     // Not animated: an animated overview zoom would finish after, and undo, the first route fit.
     state.map.fitBounds(bounds, { animate: false });
     state.roadFeatures = (data.roads && data.roads.features) || [];
+    window.FirstLightStreetLabels.create(state.map, state.roadFeatures);
   }
 
   function renderRoads(snapshot) {

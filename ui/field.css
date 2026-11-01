@@ -217,3 +217,14 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   .fdot.live, .field-toast, .field-sheet.flash { animation: none; }
 }
+
+/* Street names on the aerial map (ui/street-labels.js) */
+.street-label { pointer-events: none; }
+.street-label span {
+  position: absolute;
+  white-space: nowrap;
+  font: 600 11px/1 -apple-system, BlinkMacSystemFont, "Inter", sans-serif;
+  letter-spacing: 0.02em;
+  color: #f8fafc;
+  text-shadow: 0 0 3px #0a0e15, 0 0 3px #0a0e15, 0 1px 2px #0a0e15;
+}
