@@ -212,6 +212,12 @@ class FirstLightState:
             "cloud_cache_target": 0,
         }
 
+    def command_post_node(self) -> int | None:
+        """Origin for clearance rankings: the same command post the KPIs and the agent measure from."""
+        self.ensure_loaded()
+        assert self.active_graph is not None
+        return COMMAND_POST_NODE if COMMAND_POST_NODE in self.active_graph else None
+
     def default_route_endpoints(self) -> tuple[tuple[float, float], tuple[float, float]]:
         """Return the default `(origin, destination)`: the command post and the easternmost node."""
         self.ensure_loaded()
@@ -678,6 +684,7 @@ def _run_demo_warmup() -> None:
         assert state.active_graph is not None
         recs = rank_choke_point_clearance_roi(
             state.active_graph,
+            origin_node=state.command_post_node(),
             vehicle_class="fire_engine",
             buildings_source=(
                 BUILDINGS_GRADED_GEOJSON_PATH
@@ -1307,6 +1314,7 @@ async def post_incident_briefing(req: IncidentBriefingRequest) -> dict[str, Any]
 
     recs = rank_choke_point_clearance_roi(
         state.active_graph,
+        origin_node=state.command_post_node(),
         vehicle_class=vc,
         buildings_source=BUILDINGS_GRADED_GEOJSON_PATH if BUILDINGS_GRADED_GEOJSON_PATH.exists() else BUILDINGS_GEOJSON_PATH,
         max_recommendations=req.max_corridors,
@@ -1649,7 +1657,7 @@ def get_clearance_roi(
     state.ensure_loaded()
     assert state.active_graph is not None
 
-    resolved_origin: int | str | None = None
+    resolved_origin: int | str | None = state.command_post_node()
     if origin_node is not None:
         resolved_origin = state._resolve_node_id(state.active_graph, origin_node)
 
@@ -1760,6 +1768,7 @@ def post_simulate_clear(req: SimulateClearRequest) -> dict[str, Any]:
     assert state.active_graph is not None
     recommendations = rank_choke_point_clearance_roi(
         state.active_graph,
+        origin_node=state.command_post_node(),
         vehicle_class=vc,
         buildings_source=BUILDINGS_GRADED_GEOJSON_PATH if BUILDINGS_GRADED_GEOJSON_PATH.exists() else BUILDINGS_GEOJSON_PATH,
         max_recommendations=15,

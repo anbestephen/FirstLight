@@ -304,6 +304,19 @@ def test_choke_point_clearance_roi_deterministic_ranking() -> None:
     assert after_route.node_path == [0, 20]
 
 
+def test_clearance_between_two_cut_off_areas_unlocks_nothing_yet() -> None:
+    """A pile is only worth its buildings if clearing it connects them to the origin."""
+    G = nx.MultiDiGraph()
+    road = dict(length_m=50.0, nominal_width_m=8.0, water_overlap_ratio=0.0, gsd_m_per_px=0.28)
+    G.add_node(0, x=-85.425, y=29.940, high_severity_buildings=0)
+    G.add_node(1, x=-85.424, y=29.940, high_severity_buildings=0)
+    G.add_node(2, x=-85.423, y=29.940, high_severity_buildings=7)
+    G.add_edge(0, 1, key=0, name="Washed Out Rd", min_clear_width_m=0.0, debris_area_sqm=0.0, **road)
+    G.add_edge(1, 2, key=0, name="Pile St", min_clear_width_m=1.0, debris_area_sqm=3.0, **road)
+    ranked = rank_choke_point_clearance_roi(G, origin_node=0, vehicle_class=VehicleClass.FIRE_ENGINE, buildings_source=None)
+    assert ranked == []  # Pile St links 1 and 2, but both stay cut off from the origin
+
+
 def test_real_mexico_beach_osm_graph_routing_and_roi() -> None:
     """
     End-to-end integration test on `data/osm_road_graph.graphml` and `data/osm_buildings.geojson`.

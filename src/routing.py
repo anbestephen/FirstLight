@@ -862,8 +862,9 @@ def rank_choke_point_clearance_roi(
     max_recommendations: int | None = None,
 ) -> list[ChokePointROIRecommendation]:
     """
-    Identify critical debris bottleneck edges where clearing debris unlocks isolated
-    civilian building clusters, and rank them strictly by Clearance ROI descending:
+    Identify critical debris bottleneck edges where clearing debris makes isolated
+    civilian building clusters reachable from `origin_node`, and rank them strictly by
+    Clearance ROI descending:
 
         Clearance ROI = (Count of high-severity building structures unlocked)
                         / (Square meters of debris requiring clearance)
@@ -939,20 +940,12 @@ def rank_choke_point_clearance_roi(
             if origin_node in G_sim
             else set()
         )
+        # Only buildings that become reachable from the origin count: a pile that links two
+        # areas both still cut off from the command post unlocks nothing yet.
         newly_unlocked_nodes = sorted(
             sim_reachable - baseline_reachable,
             key=lambda x: str(x),
         )
-
-        # If the choke point is in a downstream cluster not yet connected to origin_node,
-        # also evaluate local cluster unlock from the upstream side `u` of the choke point.
-        if not newly_unlocked_nodes and u in G_base:
-            base_from_u = nx.descendants(G_base, u) | {u}
-            sim_from_u = nx.descendants(G_sim, u) | {u}
-            newly_unlocked_nodes = sorted(
-                sim_from_u - base_from_u,
-                key=lambda x: str(x),
-            )
 
         unlocked_structures = sum(
             int(G.nodes[n].get("high_severity_buildings", 0))
