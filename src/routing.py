@@ -354,6 +354,8 @@ def _apply_record(data: dict[str, Any], rec: dict[str, Any], gsd: float, source:
     data["water_overlap_ratio"] = water_ratio
     data["has_water_obstruction"] = has_water
     data["debris_area_sqm"] = float(rec["debris_area_m2"])
+    # Clear width at each 5 m station (0 where standing water), for blocked-length summaries.
+    data["station_widths_m"] = [0.0 if st["cause"] == "water" else float(st["clear_width_m"]) for st in rec["stations"]]
     data["water_area_m2"] = float(rec["water_area_m2"])
     data["gsd_m_per_px"] = gsd
     data["bottleneck_lonlat"] = rec.get("bottleneck_lonlat")

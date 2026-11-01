@@ -144,3 +144,13 @@ def test_clearance_path_opens_a_route_to_the_worst_hit_block(tools: AgentTools) 
     measured = [s["debris_m2"] for s in plan["segments_to_clear"] if s["debris_measured"]]
     assert plan["measured_debris_m2"] == pytest.approx(sum(measured), abs=len(measured))
     assert plan["route_after_clearance"]["distance_km"] > 0
+
+
+def test_blocked_length_counts_stations_at_or_below_the_vehicle_minimum() -> None:
+    from src.agent_tools import _blocked_length_m
+
+    edge = {"station_widths_m": [7.5, 1.5, 0.0, 2.2, 3.6]}
+    assert _blocked_length_m(edge, "atv") == 5  # only the 0.0 m station
+    assert _blocked_length_m(edge, "ambulance") == 15  # 1.5, 0.0 and 2.2 (passable needs > 2.2 m)
+    assert _blocked_length_m(edge, "fire_engine") == 15  # 3.6 m admits a fire engine
+    assert _blocked_length_m({}, "atv") == 0

@@ -29,6 +29,7 @@ from src.routing import (
     rank_choke_point_clearance_roi,
     simulate_choke_point_clearance,
 )
+from src.sam_measure import STATION_INTERVAL_M
 
 VEHICLES = ("atv", "ambulance", "fire_engine")
 HIGH_SEVERITY = {"major_damage", "destroyed"}
@@ -68,6 +69,12 @@ def _reachable_nodes(G: nx.MultiDiGraph, origin: Any, vehicle_class: str) -> set
     H.add_node(origin)
     H.add_edges_from((u, v) for u, v, d in G.edges(data=True) if d.get(attr))
     return nx.descendants(H, origin) | {origin}
+
+
+def _blocked_length_m(data: dict[str, Any], vehicle_class: str) -> int:
+    """Metres of a road (5 m stations) at or below the vehicle's minimum clear width."""
+    widths = data.get("station_widths_m") or []
+    return int(STATION_INTERVAL_M * sum(w <= VEHICLE_MIN_WIDTH_M[vehicle_class] for w in widths))
 
 
 class AgentTools:
@@ -312,6 +319,7 @@ class AgentTools:
         )
         return {
             "vehicle": VEHICLE_LABEL[vc],
+            "scope": "network-wide: buildings reachable from the command post, not tied to one destination",
             "choke_points": [
                 {
                     "rank": r.rank,
@@ -319,7 +327,9 @@ class AgentTools:
                     "edge_id": f"{r.edge_u}-{r.edge_v}-{r.edge_key}",
                     "clear_width_now_m": round(r.current_clear_width_m, 1),
                     "clear_width_after_m": round(r.restored_clear_width_m, 1),
-                    "debris_m2": round(r.debris_area_sqm),
+                    "debris_m2": round(r.debris_area_sqm, 1),
+                    "blocked_length_m": _blocked_length_m(G[r.edge_u][r.edge_v][r.edge_key], vc),
+                    "drone_check_advised": bool(r.needs_drone_recon),
                     "high_severity_buildings_unlocked": r.high_severity_structures_unlocked,
                     "buildings_per_100_m2_cleared": round(100.0 * r.clearance_roi, 1),
                 }
@@ -446,7 +456,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "rank_clearance",
-            "description": "Debris piles ranked by severely damaged buildings unlocked per m² cleared for a vehicle class.",
+            "description": "Debris piles anywhere on the network ranked by severely damaged buildings (reachable from the command post) unlocked per m² of SAM-measured debris, for a vehicle class. Not tied to a destination; includes how many metres of each road are too narrow and whether a drone check is advised.",
             "parameters": {
                 "type": "object",
                 "properties": {"vehicle_class": _VEHICLE_ARG, "limit": {"type": "integer", "minimum": 1, "maximum": 10}},

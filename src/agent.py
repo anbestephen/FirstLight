@@ -43,10 +43,13 @@ SYSTEM_PROMPT = (
     "(segments and m² to clear, the route after clearance, how many need drone recon first). "
     "highest_impact_clearance_for_this_vehicle is the best clearance anywhere; it opens the route only "
     "if opens_this_route is true.\n"
-    "6. Refer to roads by name and to hotspots by their nearby road (\"the worst-hit block near 16th "
+    "6. rank_clearance ranks piles across the whole network by buildings reachable from the command "
+    "post; say so, and if drone_check_advised is true say a drone check is advised before clearing. "
+    "Give blocked_length_m with debris_m2, since SAM sees only part of the debris.\n"
+    "7. Refer to roads by name and to hotspots by their nearby road (\"the worst-hit block near 16th "
     "Street\"); never mention edge ids or node ids. Write areas as m².\n"
-    "7. Only dispatch a field unit when the commander asks to send, dispatch or get a vehicle somewhere.\n"
-    "8. Answer in at most 4 short sentences a responder can act on, including the key numbers "
+    "8. Only dispatch a field unit when the commander asks to send, dispatch or get a vehicle somewhere.\n"
+    "9. Answer in at most 4 short sentences a responder can act on, including the key numbers "
     "(clear width, km, minutes, building counts)."
 )
 
@@ -274,12 +277,17 @@ class CommanderAgent:
             async for ev in self._call_tool("rank_clearance", {"vehicle_class": vc, "limit": 3}, results):
                 yield ev
             top = results[-1]["choke_points"]
-            text = (
-                f"Clear {top[0]['road']} first: {top[0]['debris_m2']} m² of debris; it unlocks "
-                f"{top[0]['high_severity_buildings_unlocked']} severely damaged buildings for {results[-1]['vehicle']}."
-                if top
-                else f"No debris clearance unlocks more buildings for {results[-1]['vehicle']}."
-            )
+            if top:
+                t = top[0]
+                text = (
+                    f"Across the network, clear {t['road']} first: {t['blocked_length_m']} m of it is too narrow, "
+                    f"with {t['debris_m2']} m² of debris measured by SAM. It unlocks "
+                    f"{t['high_severity_buildings_unlocked']} severely damaged buildings for {results[-1]['vehicle']} "
+                    "from the command post."
+                    + (" A drone check is advised before clearing." if t["drone_check_advised"] else "")
+                )
+            else:
+                text = f"No debris clearance unlocks more buildings for {results[-1]['vehicle']}."
         elif road and not any(w in q for w in ("send", "dispatch", "get", "route")):
             async for ev in self._call_tool("measure_road", {"road_name": road}, results):
                 yield ev
