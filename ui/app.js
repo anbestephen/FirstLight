@@ -349,13 +349,15 @@
       if (Number(p.min_clear_width_m) > VEHICLE_MIN_M.atv) {
         return { color: C.narrow, weight: 3, opacity: 0.85 };
       }
-      return { color: C.blocked, weight: 3, opacity: 0.85, dashArray: "8, 5" };
+      return { color: C.blocked, weight: 3, opacity: 0.9, dashArray: "10, 7" };
     }
     // Dark casing under every road separates the lines from the aerial photo and building outlines.
+    // It follows the line's dash pattern, so the gaps in blocked and water roads show the photo.
     L.geoJSON(state.roadsGeojson, {
       interactive: false,
       style: function (feature) {
-        return { color: C.ink, weight: roadStyle(feature).weight + 2.5, opacity: 0.55 };
+        const line = roadStyle(feature);
+        return { color: C.ink, weight: line.weight + 2.5, opacity: 0.55, dashArray: line.dashArray, lineCap: line.lineCap };
       },
     }).addTo(state.roadsLayer);
     L.geoJSON(state.roadsGeojson, {

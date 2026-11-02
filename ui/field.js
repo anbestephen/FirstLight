@@ -134,9 +134,12 @@
       if (water.has(id)) {
         style = { color: "#a78bfa", weight: 3, opacity: 0.95, dashArray: "1, 7", lineCap: "round" };
       } else if (blocked.has(id)) {
-        style = { color: "#f87171", weight: 3, opacity: 0.85, dashArray: "8, 5" };
+        style = { color: "#f87171", weight: 3, opacity: 0.9, dashArray: "10, 7" };
       }
-      L.polyline(latLngs, { color: "#0a0e15", weight: style.weight + 2.5, opacity: 0.55, interactive: false }).addTo(state.roadsLayer);
+      L.polyline(latLngs, {
+        color: "#0a0e15", weight: style.weight + 2.5, opacity: 0.55, interactive: false,
+        dashArray: style.dashArray, lineCap: style.lineCap,
+      }).addTo(state.roadsLayer);
       L.polyline(latLngs, style).addTo(state.roadsLayer);
     });
   }
