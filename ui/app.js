@@ -183,7 +183,8 @@
     const offline = state.forceOffline || lost;
     dot.classList.toggle("online", !offline);
     dot.classList.toggle("offline", offline);
-    text.textContent = state.forceOffline ? "Blackout · on-device" : lost ? "Internet lost · on-device" : "Online";
+    // Connectivity only; where answers come from (cloud, laptop model or rules) is the AI pill's job.
+    text.textContent = state.forceOffline ? "Comms blackout" : lost ? "Internet lost" : "Online";
   }
 
   // Warm-up loads Muse Glimmer and pre-grades the top choke points; returns true when finished.
