@@ -1104,13 +1104,16 @@
               <span class="roi-rank-badge">#${rec.rank}</span>
               <span class="roi-score">+${rec.high_severity_structures_unlocked} buildings</span>
             </div>
-            <div class="roi-road-title">${rec.road_name}</div>
+            <div class="roi-road-title" title="${escapeHtml(rec.road_name)}">${escapeHtml(rec.road_name)}</div>
             <div class="roi-metrics-row">
+              <span>${rec.debris_area_sqm} m² measured debris</span>
               <span>${rec.current_clear_width_m} → ${rec.restored_clear_width_m} m</span>
-              <span>${rec.debris_area_sqm} m² debris</span>
-              <span>${(100 * rec.clearance_roi).toFixed(0)} bldgs / 100 m²</span>
             </div>
-            <div class="roi-explanation">${rec.explanation}</div>
+            ${rec.needs_drone_recon ? `<span class="roi-drone">Drone check advised</span>` : ""}
+            <details class="roi-why">
+              <summary>Why this ranks here</summary>
+              <div class="roi-explanation"><b>${(100 * rec.clearance_roi).toFixed(0)} buildings per 100 m² cleared.</b> ${escapeHtml(rec.explanation)}</div>
+            </details>
             <div class="roi-card-actions">
               <button
                 type="button"
@@ -1136,7 +1139,7 @@
 
     listEl.querySelectorAll(".roi-card").forEach(function (card) {
       card.addEventListener("click", function (ev) {
-        if (ev.target && ev.target.classList.contains("btn-sim-clear")) {
+        if (ev.target && (ev.target.classList.contains("btn-sim-clear") || ev.target.closest(".roi-why"))) {
           return;
         }
         const edgeId = card.getAttribute("data-edge-id");
