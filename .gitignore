@@ -21,5 +21,3 @@ data/tiles/
 
 # Drone patches fetched by scripts/drone_remeasure.py (re-downloadable)
 data/drone_cache/
-models
-data/tiles
