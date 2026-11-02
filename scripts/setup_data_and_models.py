@@ -1,18 +1,25 @@
-"""Reproducibility verification and automated fetch script for FirstLight judges.
+"""Check and fetch what FirstLight needs to run (`scripts/setup_data_and_models.py`).
 
-Verifies the presence and structural integrity of all pre-staged geospatial datasets,
-baked SAM 3.1 segmentation polygons, Muse Spark 1.3 graded building footprints, and
-local model weights (`models/sam3.1` and `models/Muse-Glimmer-30B-4bit`).
+Core: the committed data the dashboard, routing and rules-only agent run on. A fresh clone has
+all of it, so `--check` passes without any download.
+Optional, each enabling one feature:
+  - offline map tiles      (built locally from the committed NOAA image, no internet)
+  - drone image patches    (inspector photos after a drone check; ~124 MB from Hugging Face)
+  - Muse Glimmer 30B 4-bit (the on-laptop AI tier; ~17 GB)
+  - SAM 3.1 weights        (only to re-run the SAM bake; the measurements are committed)
+  - Meta Model API key     (the cloud tier: copy .env.example to .env)
 
 Usage:
     ./.venv/bin/python scripts/setup_data_and_models.py --check
-    ./.venv/bin/python scripts/setup_data_and_models.py --download
+    ./.venv/bin/python scripts/setup_data_and_models.py --download --no-models   # judge quick path
+    ./.venv/bin/python scripts/setup_data_and_models.py --download               # everything
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -29,208 +36,127 @@ SAM31_HF_REPO = "facebook/sam3.1"
 MLX_VLM_HF_REPO = "mlx-community/Muse-Glimmer-30B-4bit"
 
 
+CORE_FILES = [
+    ("NOAA post-storm image, Oct 11 2018 (0.28 m/px)", DATA_DIR / "noaa_michael_mexico_beach.tif", 1_000_000),
+    ("OpenStreetMap road graph", DATA_DIR / "osm_road_graph.graphml", 10_000),
+    ("OpenStreetMap roads", DATA_DIR / "osm_roads.geojson", 10_000),
+    ("Muse Spark building grades (334 buildings)", DATA_DIR / "osm_buildings_graded.geojson", 20_000),
+    ("SAM 3.1 road measurements (158 roads)", DATA_DIR / "sam31_edge_measurements.json", 100_000),
+    ("SAM 3.1 masks", DATA_DIR / "sam31_mexico_beach_masks.geojson", 10_000),
+    ("SAM 3.1 drone re-measurements (74 roads)", DATA_DIR / "sam31_drone_measurements.json", 10_000),
+    ("Benchmark samples and hand labels", DATA_DIR / "ground_truth" / "road_widths_manual_test.json", 1_000),
+]
+GLIMMER_DIR = MODELS_DIR / "Muse-Glimmer-30B-4bit"
+SAM_DIR = MODELS_DIR / "sam3.1"
+TILES_DIR = DATA_DIR / "tiles" / "post"
+DRONE_CACHE_DIR = DATA_DIR / "drone_cache"
+
+
+def _glimmer_complete() -> bool:
+    """config.json plus every weight shard the index lists."""
+    index = GLIMMER_DIR / "model.safetensors.index.json"
+    if not (GLIMMER_DIR / "config.json").exists() or not index.exists():
+        return False
+    shards = set(json.loads(index.read_text())["weight_map"].values())
+    return all((GLIMMER_DIR / name).exists() and (GLIMMER_DIR / name).stat().st_size > 0 for name in shards)
+
+
+def _drone_patches() -> tuple[int, int]:
+    """(patches on disk, roads with a stored drone re-measurement)."""
+    path = DATA_DIR / "sam31_drone_measurements.json"
+    if not path.exists():
+        return 0, 0
+    roads = set()
+    for eid in json.loads(path.read_text())["edges"]:
+        u, v, k = eid.split("-")
+        roads.add((min(u, v), max(u, v), k))
+    have = len(list(DRONE_CACHE_DIR.glob("*.tif"))) if DRONE_CACHE_DIR.exists() else 0
+    return have, len(roads)
+
+
+def _api_key_set() -> bool:
+    """MODEL_API_KEY in the environment or in .env (its value is never printed)."""
+    env = PROJECT_ROOT / ".env"
+    if os.environ.get("MODEL_API_KEY"):
+        return True
+    return env.exists() and any(
+        line.split("=", 1)[0].strip().removeprefix("export ").strip() == "MODEL_API_KEY"
+        and line.split("=", 1)[1].strip()
+        for line in env.read_text().splitlines()
+        if "=" in line and not line.lstrip().startswith("#")
+    )
+
+
 def verify_environment() -> tuple[bool, list[dict]]:
-    """Check all required data files, baked GeoJSONs, benchmarks, and model weights."""
+    """Core files (all required) and optional features (each reported with what it enables)."""
     checks: list[dict] = []
+    for label, path, min_bytes in CORE_FILES:
+        size = path.stat().st_size if path.exists() else 0
+        checks.append({"group": "core", "label": label, "path": str(path.relative_to(PROJECT_ROOT)), "passed": size >= min_bytes})
 
-    required_files = [
-        (
-            "NOAA Hurricane Michael GeoTIFF (EPSG:32616, 0.2804 m/px)",
-            DATA_DIR / "noaa_michael_mexico_beach.tif",
-            1_000_000,
-        ),
-        (
-            "OSM Mexico Beach Road Graph (GraphML)",
-            DATA_DIR / "osm_road_graph.graphml",
-            10_000,
-        ),
-        (
-            "OSM Mexico Beach Roads (GeoJSON)",
-            DATA_DIR / "osm_roads.geojson",
-            10_000,
-        ),
-        (
-            "OSM Mexico Beach Building Footprints (GeoJSON)",
-            DATA_DIR / "osm_buildings.geojson",
-            10_000,
-        ),
-        (
-            "Baked SAM 3.1 Pavement/Debris/Water Masks (sam-3.1)",
-            DATA_DIR / "sam31_mexico_beach_masks.geojson",
-            5_000,
-        ),
-        (
-            "Muse Spark 1.3 Graded Buildings (334 structures)",
-            DATA_DIR / "osm_buildings_graded.geojson",
-            20_000,
-        ),
-        (
-            "Baked SAM 3.1 Road Measurements (158 roads)",
-            DATA_DIR / "sam31_edge_measurements.json",
-            100_000,
-        ),
-        (
-            "Held-out Benchmark Samples (40 roads, 40 buildings)",
-            DATA_DIR / "ground_truth" / "road_width_samples.json",
-            1_000,
-        ),
-        (
-            "Meta SAM 3.1 Local Weights (model.safetensors)",
-            MODELS_DIR / "sam3.1" / "model.safetensors",
-            100_000_000,
-        ),
-        (
-            "Apple Silicon MLX 4-bit Muse Glimmer 30B Config",
-            MODELS_DIR / "Muse-Glimmer-30B-4bit" / "config.json",
-            100,
-        ),
+    have, want = _drone_patches()
+    optional = [
+        ("Offline map tiles (full-resolution imagery)", "data/tiles/post", TILES_DIR.exists() and any(TILES_DIR.iterdir())),
+        (f"Drone image patches ({have}/{want})", "data/drone_cache", want > 0 and have >= want),
+        ("Muse Glimmer 30B 4-bit, all weights (on-laptop AI)", "models/Muse-Glimmer-30B-4bit", _glimmer_complete()),
+        ("SAM 3.1 weights (only to re-run the SAM bake)", "models/sam3.1", (SAM_DIR / "model.safetensors").exists()),
+        ("Meta Model API key (cloud AI tier)", ".env", _api_key_set()),
     ]
-
-    all_ok = True
-    for label, path, min_bytes in required_files:
-        exists = path.exists()
-        size = path.stat().st_size if exists else 0
-        passed = exists and size >= min_bytes
-        if not passed:
-            all_ok = False
-        checks.append(
-            {
-                "label": label,
-                "path": str(path.relative_to(PROJECT_ROOT)),
-                "exists": exists,
-                "size_bytes": size,
-                "passed": passed,
-            }
-        )
-
-    # Validate feature counts on baked artifacts if present
-    sam_path = DATA_DIR / "sam31_mexico_beach_masks.geojson"
-    if sam_path.exists():
-        sam_data = json.loads(sam_path.read_text(encoding="utf-8"))
-        n_features = len(sam_data.get("features", []))
-        checks.append(
-            {
-                "label": f"SAM 3.1 Mask Feature Count ({n_features} polygons)",
-                "path": "data/sam31_mexico_beach_masks.geojson",
-                "exists": True,
-                "size_bytes": n_features,
-                "passed": n_features >= 50,
-            }
-        )
-        if n_features < 50:
-            all_ok = False
-
-    bldg_path = DATA_DIR / "osm_buildings_graded.geojson"
-    if bldg_path.exists():
-        bldg_data = json.loads(bldg_path.read_text(encoding="utf-8"))
-        n_bldgs = len(bldg_data.get("features", []))
-        checks.append(
-            {
-                "label": f"Muse Spark 1.3 Graded Building Count ({n_bldgs} buildings)",
-                "path": "data/osm_buildings_graded.geojson",
-                "exists": True,
-                "size_bytes": n_bldgs,
-                "passed": n_bldgs >= 300,
-            }
-        )
-        if n_bldgs < 300:
-            all_ok = False
-
-    return all_ok, checks
+    for label, path, ok in optional:
+        checks.append({"group": "optional", "label": label, "path": path, "passed": bool(ok)})
+    return all(c["passed"] for c in checks if c["group"] == "core"), checks
 
 
-def download_missing_assets() -> None:
-    """Download or regenerate any missing datasets or HuggingFace model weights."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
-
-    geotiff_path = DATA_DIR / "noaa_michael_mexico_beach.tif"
-    if not geotiff_path.exists():
+def download_missing_assets(*, models: bool = True) -> None:
+    """Build or fetch the optional assets that are missing (models only when `models`)."""
+    if not (DATA_DIR / "noaa_michael_mexico_beach.tif").exists():
         raise SystemExit(
-            f"{geotiff_path} is missing. It is part of the repository: restore it with "
-            f"`git checkout -- {geotiff_path.relative_to(PROJECT_ROOT)}` (source archive: {NOAA_SOURCE_ARCHIVE})."
+            "data/noaa_michael_mexico_beach.tif is missing. It is part of the repository: restore it with "
+            f"`git checkout -- data/noaa_michael_mexico_beach.tif` (source archive: {NOAA_SOURCE_ARCHIVE})."
         )
-
-    sam_dir = MODELS_DIR / "sam3.1"
-    if not (sam_dir / "model.safetensors").exists():
-        print(f"[download] Downloading {SAM31_HF_REPO} -> {sam_dir} ...")
-        from huggingface_hub import snapshot_download
-
-        snapshot_download(repo_id=SAM31_HF_REPO, local_dir=str(sam_dir))
-
-    mlx_dir = MODELS_DIR / "Muse-Glimmer-30B-4bit"
-    if not (mlx_dir / "config.json").exists():
-        print(f"[download] Downloading {MLX_VLM_HF_REPO} -> {mlx_dir} ...")
-        from huggingface_hub import snapshot_download
-
-        snapshot_download(repo_id=MLX_VLM_HF_REPO, local_dir=str(mlx_dir))
-
-    sam_geojson = DATA_DIR / "sam31_mexico_beach_masks.geojson"
-    if not sam_geojson.exists():
-        print("[rebuild] Running scripts/bake_sam31_masks.py ...")
-        subprocess.run(
-            [sys.executable, str(PROJECT_ROOT / "scripts" / "bake_sam31_masks.py")],
-            check=True,
-        )
-
-    tiles_dir = DATA_DIR / "tiles" / "post"
-    if not tiles_dir.exists():
-        print("[rebuild] Running scripts/build_map_tiles.py ...")
+    if not (TILES_DIR.exists() and any(TILES_DIR.iterdir())):
+        print("[build] Offline map tiles from the NOAA image (no internet) ...", flush=True)
         subprocess.run([sys.executable, str(PROJECT_ROOT / "scripts" / "build_map_tiles.py")], check=True)
+    have, want = _drone_patches()
+    if have < want:
+        print(f"[download] Drone image patches from Hugging Face ({want - have} roads) ...", flush=True)
+        subprocess.run([sys.executable, str(PROJECT_ROOT / "scripts" / "drone_remeasure.py"), "--patches-only"], check=True)
+    if not models:
+        return
+    from huggingface_hub import snapshot_download
 
-    graded_geojson = DATA_DIR / "osm_buildings_graded.geojson"
-    if not graded_geojson.exists():
-        print("[rebuild] Running scripts/grade_buildings_muse_spark.py ...")
-        subprocess.run(
-            [sys.executable, str(PROJECT_ROOT / "scripts" / "grade_buildings_muse_spark.py")],
-            check=True,
-        )
-
-    bench_json = BENCHMARKS_DIR / "benchmark_results.json"
-    if not bench_json.exists():
-        print("[rebuild] Running benchmarks/run_benchmarks.py ...")
-        subprocess.run(
-            [sys.executable, str(PROJECT_ROOT / "benchmarks" / "run_benchmarks.py")],
-            check=True,
-        )
+    if not _glimmer_complete():
+        print(f"[download] {MLX_VLM_HF_REPO} -> {GLIMMER_DIR} (~17 GB) ...", flush=True)
+        snapshot_download(repo_id=MLX_VLM_HF_REPO, local_dir=str(GLIMMER_DIR))
+    if not (SAM_DIR / "model.safetensors").exists():
+        print(f"[download] {SAM31_HF_REPO} -> {SAM_DIR} ...", flush=True)
+        snapshot_download(repo_id=SAM31_HF_REPO, local_dir=str(SAM_DIR))
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Verify or download FirstLight datasets, SAM 3.1 masks, and local MLX/PyTorch models."
-    )
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        help="Verify all local datasets, baked model artifacts, and weights without downloading.",
-    )
-    parser.add_argument(
-        "--download",
-        action="store_true",
-        help="Download missing NOAA/HuggingFace assets and regenerate baked GeoJSON artifacts.",
-    )
+    parser = argparse.ArgumentParser(description="Check or fetch FirstLight's data and models.")
+    parser.add_argument("--check", action="store_true", help="Report what is present (default).")
+    parser.add_argument("--download", action="store_true", help="Build or fetch missing optional assets.")
+    parser.add_argument("--no-models", action="store_true", help="With --download: skip the model weights.")
     args = parser.parse_args()
 
     if args.download:
-        download_missing_assets()
+        download_missing_assets(models=not args.no_models)
 
-    all_ok, checks = verify_environment()
+    core_ok, checks = verify_environment()
     print("=" * 78)
-    print("FirstLight Reproducibility & Asset Verification Report")
+    for group, title in (("core", "Core (committed; required)"), ("optional", "Optional features")):
+        print(title)
+        for item in (c for c in checks if c["group"] == group):
+            status = "OK" if item["passed"] else ("MISSING" if group == "core" else "not set")
+            print(f"  [{status:7s}] {item['label']:52s} ({item['path']})")
     print("=" * 78)
-    for item in checks:
-        status = "PASS" if item["passed"] else "MISSING"
-        print(f"[{status:7s}] {item['label']:55s} ({item['path']})")
-    print("=" * 78)
-
-    if not all_ok:
-        print(
-            "One or more required assets are missing. Run:\n"
-            "  ./.venv/bin/python scripts/setup_data_and_models.py --download"
-        )
+    if not core_ok:
+        print("Core data is missing: re-clone the repository or `git checkout -- data/`.")
         return 1
-
-    print("All required geospatial datasets, SAM 3.1 masks, Muse Spark grades, and model weights verified.")
+    print("Core data present: the dashboard, routing and rules-only agent run.")
+    if not all(c["passed"] for c in checks):
+        print("Optional assets: ./.venv/bin/python scripts/setup_data_and_models.py --download [--no-models]")
     return 0
 
 
