@@ -57,6 +57,21 @@ Experimental integration (in the UI, not part of the core demo): **Muse Wonder 1
 
 ---
 
+## Bonus categories
+
+**Best Build on Meta Open Weight Models: Muse Glimmer 30B on the laptop.** `mlx-community/Muse-Glimmer-30B-4bit` runs on the command laptop itself (Apple M1 Max, 64 GB) through MLX (`mlx-vlm`), with no cloud or partner inference. It is FirstLight's offline brain:
+- **Two jobs:** it grades road corridors from their aerial crop (low reasoning), and it runs the commander agent with the same seven tools through a JSON action protocol, its numbers checked like Muse Spark's.
+- **Always ready:** warm-up loads it at startup and pre-grades the top choke points; it stays resident, and a commander question preempts any background grading.
+- **When it takes over:** automatically when the internet drops (a 5 s probe of the Meta API host), or with the Comms blackout switch.
+- **Chosen by measurement:** it beat Llama 3.2 11B Vision on the [comparison](#offline-model-choice) (53 % vs 5 % exact grades, tool use on 3/3 vs 1/3 agent questions).
+- **How to see it running:** the AI pill and the agent's answer card read "Muse Glimmer · on this laptop"; `GET /api/health` shows `vlm_tiers.tier_2_runtime.resident: true`. On the laptop an agent step takes about 20 s, so a question takes 45–85 s.
+
+**Best Agentic Use-Case: a commander agent that plans, checks and dispatches.** Muse Spark 1.3 plans with native function calling over seven deterministic tools (`measure_road`, `damage_hotspots`, `plan_route`, `plan_clearance_path`, `rank_clearance`, `reachability_summary`, `dispatch_field_unit`), for up to six steps per question:
+- **Multi-step:** "Can an ambulance reach the worst-hit block?" runs `damage_hotspots` → `plan_route` (blocked) → `plan_clearance_path`, and answers with the 3 segments (36 m²) to clear for a 1.3 km route.
+- **Acts in the world:** "Send an ambulance to North 32nd Street" plans the route and calls `dispatch_field_unit`; field phones on the local Wi-Fi switch to the new route within a second. Dispatch refuses a destination with no passable route.
+- **Checked:** every number in the answer must appear in a tool result; an answer that fails gets one rewrite, then any remaining number is shown in red.
+- **Keeps working offline:** the same agent runs on Muse Glimmer when the internet is down, and on rules and templates when no model is available. Questions can be spoken (Muse Voice Transcribe) when online.
+
 ## How it works
 
 ```mermaid
