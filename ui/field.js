@@ -129,12 +129,14 @@
       const latLngs = coords.map(function (c) {
         return [c[1], c[0]];
       });
-      let style = { color: "#34d399", weight: 3, opacity: 0.55 };
+      // Thinner than the route, on a dark casing; blocked dashed and water dotted (same as the dashboard).
+      let style = { color: "#34d399", weight: 2.5, opacity: 0.75 };
       if (water.has(id)) {
-        style = { color: "#a78bfa", weight: 4, opacity: 0.9, dashArray: "6, 6" };
+        style = { color: "#a78bfa", weight: 3, opacity: 0.95, dashArray: "1, 7", lineCap: "round" };
       } else if (blocked.has(id)) {
-        style = { color: "#f87171", weight: 4, opacity: 0.9 };
+        style = { color: "#f87171", weight: 3, opacity: 0.85, dashArray: "8, 5" };
       }
+      L.polyline(latLngs, { color: "#0a0e15", weight: style.weight + 2.5, opacity: 0.55, interactive: false }).addTo(state.roadsLayer);
       L.polyline(latLngs, style).addTo(state.roadsLayer);
     });
   }

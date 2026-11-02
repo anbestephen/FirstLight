@@ -307,11 +307,13 @@
             fillOpacity: 0.85,
           };
         }
+        // Buildings recede behind the roads and the route; unlocked ones (above) stay bold.
         return {
           color: sevColors[sev] || "#64748b",
           fillColor: sevColors[sev] || "#64748b",
-          weight: 1,
-          fillOpacity: 0.35,
+          weight: 0.75,
+          opacity: 0.55,
+          fillOpacity: 0.16,
         };
       },
       onEachFeature: function (feature, layer) {
@@ -332,22 +334,32 @@
       return;
     }
 
+    // Status lines stay thinner than the route (6 px on a 10 px halo) so the route reads first;
+    // blocked is dashed and water dotted, so status does not depend on colour alone.
     const passKey = `passable_${state.vehicleClass}`;
+    function roadStyle(feature) {
+      const p = feature.properties || {};
+      if (p.has_water_obstruction || Number(p.water_overlap_ratio) > 0) {
+        return { color: C.water, weight: 3, opacity: 0.95, dashArray: "1, 7", lineCap: "round" };
+      }
+      if (p[passKey]) {
+        return { color: C.open, weight: 2.5, opacity: 0.8 };
+      }
+      // Some clear width, just not enough for this vehicle, vs no usable width at all.
+      if (Number(p.min_clear_width_m) > VEHICLE_MIN_M.atv) {
+        return { color: C.narrow, weight: 3, opacity: 0.85 };
+      }
+      return { color: C.blocked, weight: 3, opacity: 0.85, dashArray: "8, 5" };
+    }
+    // Dark casing under every road separates the lines from the aerial photo and building outlines.
     L.geoJSON(state.roadsGeojson, {
+      interactive: false,
       style: function (feature) {
-        const p = feature.properties || {};
-        if (p.has_water_obstruction || Number(p.water_overlap_ratio) > 0) {
-          return { color: C.water, weight: 4, opacity: 0.95, dashArray: "6, 6" };
-        }
-        if (p[passKey]) {
-          return { color: C.open, weight: 3, opacity: 0.8 };
-        }
-        // Some clear width, just not enough for this vehicle, vs no usable width at all.
-        if (Number(p.min_clear_width_m) > VEHICLE_MIN_M.atv) {
-          return { color: C.narrow, weight: 4, opacity: 0.95 };
-        }
-        return { color: C.blocked, weight: 4, opacity: 0.95 };
+        return { color: C.ink, weight: roadStyle(feature).weight + 2.5, opacity: 0.55 };
       },
+    }).addTo(state.roadsLayer);
+    L.geoJSON(state.roadsGeojson, {
+      style: roadStyle,
       onEachFeature: function (feature, layer) {
         layer.on("click", function () {
           const p = feature.properties || {};
