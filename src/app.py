@@ -1029,6 +1029,7 @@ def get_health() -> dict[str, Any]:
     active_tier = (
         ConnectivityTier.TIER_1_CLOUD.value
         if cloud_key_configured
+        and state.dispatch.uplink_online is not False  # internet loss measured by the uplink probe
         and state.router.mode in (FailoverMode.AUTO, FailoverMode.FORCE_CLOUD)
         else (
             ConnectivityTier.TIER_2_MLX.value

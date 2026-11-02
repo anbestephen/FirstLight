@@ -164,7 +164,7 @@
 
       setNetworkStatus();
       const tiers = data.vlm_tiers || {};
-      setAiPill(state.forceOffline || state.uplinkOnline === false ? "tier_2" : tiers.active_tier);
+      setAiPill(state.forceOffline ? "tier_2" : tiers.active_tier);
 
       const gsd = data.geospatial ? data.geospatial.gsd_m_per_px : 0.2804;
       document.getElementById("hw-status-badge").textContent =
@@ -945,8 +945,7 @@
       if (conn.uplink_online !== undefined && conn.uplink_online !== state.uplinkOnline) {
         const wasKnown = state.uplinkOnline !== null;
         state.uplinkOnline = conn.uplink_online;
-        setNetworkStatus();
-        setAiPill(state.forceOffline || state.uplinkOnline === false ? "tier_2" : "tier_1");
+        fetchHealth(); // the server's active tier accounts for the API key, the uplink and the laptop model
         if (wasKnown) {
           showToast(
             state.uplinkOnline
