@@ -61,8 +61,21 @@ def _glimmer_complete() -> bool:
     return all((GLIMMER_DIR / name).exists() and (GLIMMER_DIR / name).stat().st_size > 0 for name in shards)
 
 
+def patch_ok(path: Path) -> bool:
+    """A drone patch that exists and opens as an RGB(A) GeoTIFF."""
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+    try:
+        import rasterio
+
+        with rasterio.open(path) as src:
+            return src.count >= 3 and src.width > 0 and src.height > 0
+    except Exception:
+        return False
+
+
 def _drone_patches() -> tuple[int, int]:
-    """(patches on disk, roads with a stored drone re-measurement)."""
+    """(roads whose patch is present and valid, roads with a stored drone re-measurement)."""
     path = DATA_DIR / "sam31_drone_measurements.json"
     if not path.exists():
         return 0, 0
@@ -70,7 +83,10 @@ def _drone_patches() -> tuple[int, int]:
     for eid in json.loads(path.read_text())["edges"]:
         u, v, k = eid.split("-")
         roads.add((min(u, v), max(u, v), k))
-    have = len(list(DRONE_CACHE_DIR.glob("*.tif"))) if DRONE_CACHE_DIR.exists() else 0
+    have = sum(
+        patch_ok(DRONE_CACHE_DIR / f"{u}-{v}-{k}.tif") or patch_ok(DRONE_CACHE_DIR / f"{v}-{u}-{k}.tif")
+        for u, v, k in roads
+    )
     return have, len(roads)
 
 

@@ -57,6 +57,15 @@ def save_patch(path: Path, patch) -> None:
         dst.write(alpha, [4])
 
 
+def patch_ok(path: Path) -> bool:
+    """A cached patch that exists and opens (an empty or broken file is fetched again)."""
+    try:
+        with rasterio.open(path) as src:
+            return src.count >= 3 and src.width > 0
+    except Exception:
+        return False
+
+
 def fetch_patches() -> None:
     """Download the drone patch of every stored re-measurement into data/drone_cache/ (inspector images)."""
     records = json.loads(OUT_PATH.read_text())["edges"]
@@ -70,7 +79,7 @@ def fetch_patches() -> None:
         if key in done:
             continue
         done.add(key)
-        if (CACHE_DIR / f"{eid}.tif").exists() or (CACHE_DIR / f"{v}-{u}-{k}.tif").exists():
+        if patch_ok(CACHE_DIR / f"{eid}.tif") or patch_ok(CACHE_DIR / f"{v}-{u}-{k}.tif"):
             continue
         save_patch(CACHE_DIR / f"{eid}.tif", read_patch(scenes[rec["imagery"]["scene"]], lines[(u, v, k)]))
         print(f"  {len(done)} roads: {eid}", flush=True)
