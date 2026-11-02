@@ -378,8 +378,12 @@ def apply_sam31_measurements(G: nx.MultiDiGraph, payload: dict[str, Any]) -> Non
     for u, v, k, data in G.edges(keys=True, data=True):
         rec = edges.get(f"{u}-{v}-{int(k)}")
         if rec is None:
+            # No SAM 3.1 measurement: never assume the road is open.
             data["mask_source"] = "unmeasured"
             data["needs_drone_recon"] = True
+            data["min_clear_width_m"] = 0.0
+            data["station_widths_m"] = []
+            data["clearance_reason"] = "Not measured by SAM 3.1: treated as blocked until checked."
             continue
         _apply_record(data, rec, gsd, source)
 

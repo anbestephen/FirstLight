@@ -440,3 +440,19 @@ def test_a_width_exactly_at_the_threshold_does_not_admit_the_vehicle(vehicle: st
     assert is_edge_passable_for_vehicle(threshold + 0.25, 0.0, vehicle) is True
     assert getattr(compute_passability_flags(threshold, False), vehicle) is False
     assert getattr(compute_passability_flags(threshold + 0.25, False), vehicle) is True
+
+
+def test_a_road_missing_from_the_measurements_is_closed_to_every_vehicle() -> None:
+    import networkx as nx
+
+    from src.routing import annotate_graph_with_geometry_metrics, apply_sam31_measurements
+
+    G = nx.MultiDiGraph()
+    G.add_node(1, x=-85.42, y=29.94)
+    G.add_node(2, x=-85.419, y=29.94)
+    G.add_edge(1, 2, key=0, highway="residential", length=100.0, min_clear_width_m=8.0)
+    apply_sam31_measurements(G, {"edges": {}})
+    G = annotate_graph_with_geometry_metrics(G)
+    edge = G[1][2][0]
+    assert edge["mask_source"] == "unmeasured" and edge["needs_drone_recon"] is True
+    assert not any(edge[f"passable_{vc}"] for vc in ("atv", "ambulance", "fire_engine"))
