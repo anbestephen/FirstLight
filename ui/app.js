@@ -466,7 +466,9 @@
    * Fetch 5m orthogonal caliper rays & SAM 3.1 masks for `edgeId`, render on map,
    * load `/api/choke-point/{edgeId}/crop.png` or `/recon-schematic.png`, and run live 3-tier VLM assessment.
    */
+  // One right-hand panel at a time: the road inspector and the agent answer share the map's right side.
   function openInspector() {
+    document.getElementById("agent-panel").classList.add("hidden");
     document.getElementById("corridor-inspector-dock").classList.remove("hidden");
     relayoutMap();
   }
@@ -1647,6 +1649,7 @@
     const verifyEl = document.getElementById("agent-verify");
     const tierEl = document.getElementById("agent-tier");
     const askBtn = document.getElementById("agent-ask-btn");
+    closeInspector(); // one right-hand panel at a time, so the dispatched route stays visible
     panel.classList.remove("hidden");
     document.getElementById("agent-question").textContent = q;
     stepsEl.innerHTML = "";
