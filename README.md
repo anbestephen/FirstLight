@@ -36,7 +36,7 @@ Damage maps (xView2, Microsoft and others) show *what* is destroyed. After a hur
 | **Honest, held-out benchmark** | Model outputs are scored against blind hand labels; tuning and test sets are separate. |
 
 <p align="center">
-  <img src="docs/img/sam-caliper.png" alt="SAM 3.1 cross-sections on a debris-blocked road" width="68%">
+  <img src="docs/img/sam-caliper.png" alt="Clearance list and SAM 3.1 cross-sections on a debris-blocked road" width="68%">
   <img src="docs/img/field-phone.png" alt="Field phone following the dispatch" width="22%">
 </p>
 
