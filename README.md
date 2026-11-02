@@ -103,7 +103,7 @@ flowchart LR
 
 **Routing and clearance** ([`src/routing.py`](src/routing.py)). Edge weights are length / speed (ATV 8.0, ambulance 13.5, fire engine 11.2 m/s) on passable edges and ∞ otherwise. The clearance queue simulates removing each debris pile and counts the severely damaged buildings that become reachable from the command post at US‑98 & 28th Street.
 
-No single pile opens any of the five worst-hit blocks, so the **clearance path** solves a least-cost path instead:
+For ambulances and fire engines, no single pile opens any of the five worst-hit blocks (for an ATV, one pile opens the fourth), so the **clearance path** solves a least-cost path instead:
 - **Cost model:** passable segments cost almost nothing, and a blocked segment costs its measured debris in m².
 - **Excluded:** water, footways for vehicles, and roads too narrow even when clear.
 - **Unmeasured segments:** where SAM saw neither pavement nor debris, the segment is charged a fixed penalty and reported as unmeasured, never given an invented area.
