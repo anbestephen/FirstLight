@@ -1621,7 +1621,7 @@
     });
   }
 
-  function applyAgentDispatch(result) {
+  async function applyAgentDispatch(result) {
     if (!result || !result.dispatched) return;
     state.vehicleClass = result.vehicle_class;
     document.querySelectorAll(".vehicle-btn").forEach(function (b) {
@@ -1629,8 +1629,24 @@
     });
     state.destination = { lon: result.destination_lonlat[0], lat: result.destination_lonlat[1] };
     renderRoadsLayer();
-    refreshRoute();
     refreshClearanceRoi();
+    await refreshRoute();
+    fitMapToRoute();
+  }
+
+  // Zoom to the dispatched route, keeping it clear of the KPI cards (top) and the answer panel (right).
+  function fitMapToRoute() {
+    const r = state.lastRouteData;
+    if (!state.map || !r || !r.reachable || !r.geojson_geometry || !r.geojson_geometry.coordinates.length) return;
+    const latLngs = r.geojson_geometry.coordinates.map(function (c) {
+      return [c[1], c[0]];
+    });
+    const panelOpen = !document.getElementById("agent-panel").classList.contains("hidden");
+    state.map.fitBounds(L.latLngBounds(latLngs), {
+      paddingTopLeft: [80, 220],
+      paddingBottomRight: [panelOpen ? 440 : 80, 160],
+      maxZoom: 18,
+    });
   }
 
   // Only the latest question owns the panel: a new ask (e.g. a suggestion chip clicked while the
