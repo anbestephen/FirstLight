@@ -236,7 +236,7 @@
       document.getElementById("metric-dist").textContent = "—";
       nextEl.className = "next-instruction blocked";
       nextEl.textContent =
-        `Destination is cut off for a ${VEHICLE_SHORT[snapshot.vehicle_class] || "vehicle"}. ` +
+        `Destination is cut off for ${{ atv: "an ATV or on foot", ambulance: "an ambulance", fire_engine: "a fire engine" }[snapshot.vehicle_class] || "this vehicle"}. ` +
         "Hold position — command is clearing debris.";
     }
     document.getElementById("metric-avoided").textContent = String(route.blocked_segments_avoided || 0);
