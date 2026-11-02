@@ -1193,10 +1193,19 @@ def get_choke_point_caliper(edge_id: str) -> dict[str, Any]:
         props["imagery"] = measured.get("imagery")
         props["noaa_min_clear_width_m"] = measured.get("noaa_min_clear_width_m")
         props["drone_available"] = (not from_drone) and canonical_edge_id in state.drone_measurements["edges"]
+        props["drone_image_cached"] = from_drone and _drone_patch_path(u, v, k) is not None
         props["drone_unavailable_reason"] = state.drone_measurements.get("skipped", {}).get(canonical_edge_id)
         return caliper_fc
 
     raise HTTPException(status_code=404, detail=f"No SAM 3.1 measurement for road {canonical_edge_id}")
+
+
+def _drone_patch_path(u: Any, v: Any, k: int) -> Path | None:
+    """The road's drone image patch (data/drone_cache/, downloaded by setup), if present."""
+    for eid in (f"{u}-{v}-{k}", f"{v}-{u}-{k}"):
+        if (DRONE_CACHE_DIR / f"{eid}.tif").exists():
+            return DRONE_CACHE_DIR / f"{eid}.tif"
+    return None
 
 
 @app.get("/api/choke-point/{edge_id}/crop.png")
@@ -1208,12 +1217,7 @@ def get_choke_point_crop_png(edge_id: str) -> Response:
     state.ensure_loaded()
     u, v, k, edata = state.resolve_edge_by_id(edge_id)
     lon, lat = state.get_edge_midpoint_lonlat(u, v, edata)
-    source = RASTER_TIF_PATH
-    if edata.get("measurement_source") == "drone":
-        for eid in (f"{u}-{v}-{k}", f"{v}-{u}-{k}"):
-            if (DRONE_CACHE_DIR / f"{eid}.tif").exists():
-                source = DRONE_CACHE_DIR / f"{eid}.tif"
-                break
+    source = (_drone_patch_path(u, v, k) if edata.get("measurement_source") == "drone" else None) or RASTER_TIF_PATH
     png_bytes = extract_corridor_aerial_crop_png(source, lon=lon, lat=lat, size_px=256)
     return Response(content=png_bytes, media_type="image/png")
 
@@ -1267,14 +1271,9 @@ def get_choke_point_recon_schematic_png(edge_id: str) -> Response:
     record = (state.sam_measurements or {}).get("edges", {}).get(eid)
     if not record or not record.get("stations"):
         raise HTTPException(status_code=404, detail=f"road {eid} has no SAM 3.1 measurement")
-    source = RASTER_TIF_PATH
-    if record.get("measurement_source") == "drone":
-        for cached in (DRONE_CACHE_DIR / f"{eid}.tif", DRONE_CACHE_DIR / f"{v}-{u}-{k}.tif"):
-            if cached.exists():
-                source = cached
-                break
-        else:
-            raise HTTPException(status_code=404, detail="drone image for this road is not cached locally")
+    # Without the downloaded drone patch, the drone cross-sections are drawn on the NOAA image
+    # (both are in UTM 16N); the inspector caption says which image is shown.
+    source = (_drone_patch_path(u, v, k) if record.get("measurement_source") == "drone" else None) or RASTER_TIF_PATH
     return Response(content=render_cross_section_overlay_png(source, record), media_type="image/png")
 
 

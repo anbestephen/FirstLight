@@ -7,7 +7,7 @@ Writes `data/sam31_drone_measurements.json` (both edge directions, same record f
 bake plus `measurement_source` and `imagery`) and caches each patch in `data/drone_cache/` for the
 inspector's aerial view. The dashboard applies these on demand ("Drone check").
 
-Usage: ./.venv/bin/python scripts/drone_remeasure.py [--limit N] [--edge U-V-K ...] [--rederive]
+Usage: ./.venv/bin/python scripts/drone_remeasure.py [--limit N] [--edge U-V-K ...] [--rederive] [--patches-only]
 Needs the internet the first time (patches are read from Hugging Face over HTTP).
 """
 
@@ -57,12 +57,39 @@ def save_patch(path: Path, patch) -> None:
         dst.write(alpha, [4])
 
 
+def fetch_patches() -> None:
+    """Download the drone patch of every stored re-measurement into data/drone_cache/ (inspector images)."""
+    records = json.loads(OUT_PATH.read_text())["edges"]
+    lines = edge_lines_utm(ox.load_graphml(DATA / "osm_road_graph.graphml"))
+    scenes = {s.name: s for s in SCENES}
+    CACHE_DIR.mkdir(exist_ok=True)
+    done: set[frozenset] = set()
+    for eid, rec in records.items():
+        u, v, k = (int(x) for x in eid.split("-"))
+        key = frozenset({(u, v, k), (v, u, k)})
+        if key in done:
+            continue
+        done.add(key)
+        if (CACHE_DIR / f"{eid}.tif").exists() or (CACHE_DIR / f"{v}-{u}-{k}.tif").exists():
+            continue
+        save_patch(CACHE_DIR / f"{eid}.tif", read_patch(scenes[rec["imagery"]["scene"]], lines[(u, v, k)]))
+        print(f"  {len(done)} roads: {eid}", flush=True)
+    print(f"{len(done)} drone patches in {CACHE_DIR.relative_to(PROJECT_ROOT)}", flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--edge", action="append", default=[], help="only these edge ids (u-v-k)")
     parser.add_argument("--rederive", action="store_true", help="recompute verdicts from stored cross-sections only")
+    parser.add_argument(
+        "--patches-only", action="store_true",
+        help="only download the drone image patches for the stored measurements (no SAM; for a fresh clone)",
+    )
     args = parser.parse_args()
+    if args.patches_only:
+        fetch_patches()
+        return
     if args.rederive:
         out = json.loads(OUT_PATH.read_text())
         out["edges"] = {eid: rederive(rec) for eid, rec in out["edges"].items()}

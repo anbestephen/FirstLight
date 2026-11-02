@@ -123,3 +123,22 @@ def test_drone_rule_closes_a_road_on_one_narrow_cross_section() -> None:
     assert summarise_stations(stations, 20.0, 0.0, 0.0).min_clear_width_m == 5.0  # NOAA: needs two stations
     strict = summarise_stations(stations, 20.0, 0.0, 0.0, sustained=False)
     assert strict.min_clear_width_m == 0.4 and strict.pinch_station_m == 10.0
+
+
+def test_drone_checked_road_still_renders_without_the_downloaded_patch(tmp_path, monkeypatch) -> None:
+    import src.app as app_module
+    from src.app import app, state
+
+    client = TestClient(app)
+    state.ensure_loaded()
+    eid = next(iter(state.drone_measurements["edges"]))
+    monkeypatch.setattr(app_module, "DRONE_CACHE_DIR", tmp_path)  # a fresh clone: no data/drone_cache
+    try:
+        assert client.post(f"/api/choke-point/{eid}/drone-check").status_code == 200
+        props = client.get(f"/api/choke-point/{eid}/caliper").json()["properties"]
+        assert props["measurement_source"] == "drone" and props["drone_image_cached"] is False
+        schematic = client.get(f"/api/choke-point/{eid}/recon-schematic.png")
+        assert schematic.status_code == 200 and schematic.headers["content-type"] == "image/png"
+        assert client.get(f"/api/choke-point/{eid}/crop.png").status_code == 200
+    finally:
+        state.revert_drone_measurements()

@@ -511,16 +511,20 @@
     const btn = document.getElementById("btn-drone-check");
     const label = document.getElementById("drone-source");
     const wasDrone = Boolean(state.droneImagery && state.droneImagery.edgeId === state.activeEdgeId);
+    // Only show the drone photo when its patch is on this machine (setup downloads it).
     state.droneImagery =
-      props.measurement_source === "drone" && props.imagery ? { edgeId: state.activeEdgeId, flown: props.imagery.flown } : null;
+      props.measurement_source === "drone" && props.imagery && props.drone_image_cached
+        ? { edgeId: state.activeEdgeId, flown: props.imagery.flown }
+        : null;
     if (wasDrone !== Boolean(state.droneImagery)) updateInspectorImage();
     if (props.measurement_source === "drone" && props.imagery) {
       row.classList.remove("hidden");
       btn.classList.add("hidden");
       const before = props.noaa_min_clear_width_m;
       label.innerHTML =
-        `Re-measured from drone imagery, ${escapeHtml(props.imagery.flown)} (${props.imagery.gsd_m_per_px} m/px)` +
-        (before !== undefined && before !== null ? ` · NOAA <b>${Number(before).toFixed(1)} m</b> → drone <b>${Number(props.min_clear_width_m).toFixed(1)} m</b>` : "");
+        `Pre-computed SAM 3.1 re-measurement on the CRASAR drone survey flown ${escapeHtml(props.imagery.flown)} (${props.imagery.gsd_m_per_px} m/px)` +
+        (before !== undefined && before !== null ? ` · NOAA <b>${Number(before).toFixed(1)} m</b> → drone <b>${Number(props.min_clear_width_m).toFixed(1)} m</b>` : "") +
+        (props.drone_image_cached ? "" : " · drone photo not downloaded, NOAA image shown (run setup --download)");
     } else if (props.drone_available) {
       row.classList.remove("hidden");
       btn.classList.remove("hidden");
