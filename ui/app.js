@@ -49,9 +49,9 @@
   const VEHICLE_SHORT = { atv: "ATV", ambulance: "Ambulance", fire_engine: "Fire engine" };
 
   const VEHICLE_LABELS = {
-    atv: "ATV / Foot (>=1.2m)",
-    ambulance: "Ambulance / Pickup (>=2.2m)",
-    fire_engine: "Fire Engine (>=3.5m)",
+    atv: "ATV / Foot (>1.2m)",
+    ambulance: "Ambulance / Pickup (>2.2m)",
+    fire_engine: "Fire Engine (>3.5m)",
   };
 
   function formatTierLabel(tierCode) {
@@ -342,7 +342,7 @@
           return { color: C.open, weight: 3, opacity: 0.8 };
         }
         // Some clear width, just not enough for this vehicle, vs no usable width at all.
-        if (Number(p.min_clear_width_m) >= VEHICLE_MIN_M.atv) {
+        if (Number(p.min_clear_width_m) > VEHICLE_MIN_M.atv) {
           return { color: C.narrow, weight: 4, opacity: 0.95 };
         }
         return { color: C.blocked, weight: 4, opacity: 0.95 };
@@ -398,7 +398,7 @@
     const chip = document.getElementById("inspector-status-chip");
     if (chip) {
       const passCount = ["atv", "ambulance", "fire_engine"].filter(function (vc) {
-        return !hasWater && w >= VEHICLE_MIN_M[vc];
+        return !hasWater && w > VEHICLE_MIN_M[vc];
       }).length;
       chip.className = `chip ${passCount === 3 ? "ok" : passCount === 0 ? "bad" : "warn"}`;
       chip.textContent = hasWater
@@ -422,9 +422,9 @@
     }
 
     const checks = [
-      { id: "gauge-badge-atv", label: "ATV", pass: !hasWater && w >= 1.2 },
-      { id: "gauge-badge-ambulance", label: "Ambulance", pass: !hasWater && w >= 2.2 },
-      { id: "gauge-badge-fire_engine", label: "Fire engine", pass: !hasWater && w >= 3.5 },
+      { id: "gauge-badge-atv", label: "ATV", pass: !hasWater && w > 1.2 },
+      { id: "gauge-badge-ambulance", label: "Ambulance", pass: !hasWater && w > 2.2 },
+      { id: "gauge-badge-fire_engine", label: "Fire engine", pass: !hasWater && w > 3.5 },
     ];
     checks.forEach(function (item) {
       const el = document.getElementById(item.id);
@@ -617,10 +617,10 @@
 
   function caliperRayStyle(fp, emphasizePinch) {
     const w = Number(fp.clear_width_m || 0);
-    if ((emphasizePinch && fp.is_pinch_point) || fp.water_intersected || w < 1.2) {
+    if ((emphasizePinch && fp.is_pinch_point) || fp.water_intersected || w <= 1.2) {
       return { color: "#ef4444", weight: 5, opacity: 1.0 };
     }
-    if (w >= 3.5) {
+    if (w > 3.5) {
       return { color: "#10b981", weight: 3, opacity: 0.9 };
     }
     return { color: "#f59e0b", weight: 3.5, opacity: 0.95 };

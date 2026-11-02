@@ -428,3 +428,15 @@ def test_clearance_plan_picks_least_debris_among_clearable_ways_in() -> None:
     # With the only clearable road gone, no plan exists.
     G.remove_edge(1, 2)
     assert plan_least_debris_clearance(G, 1, 4, "ambulance") is None
+
+
+@pytest.mark.parametrize("vehicle,threshold", [("atv", 1.2), ("ambulance", 2.2), ("fire_engine", 3.5)])
+def test_a_width_exactly_at_the_threshold_does_not_admit_the_vehicle(vehicle: str, threshold: float) -> None:
+    from src.geometry import compute_passability_flags
+    from src.routing import is_edge_passable_for_vehicle
+
+    assert is_edge_passable_for_vehicle(threshold - 0.25, 0.0, vehicle) is False
+    assert is_edge_passable_for_vehicle(threshold, 0.0, vehicle) is False  # strict >, as in the README
+    assert is_edge_passable_for_vehicle(threshold + 0.25, 0.0, vehicle) is True
+    assert getattr(compute_passability_flags(threshold, False), vehicle) is False
+    assert getattr(compute_passability_flags(threshold + 0.25, False), vehicle) is True

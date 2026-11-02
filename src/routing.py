@@ -3,9 +3,9 @@ Multi-class NetworkX emergency vehicle routing and Choke-Point Clearance ROI eng
 
 Key Invariants (AGENTS.md & routing-engine skill):
 1. Vehicle Clearance Thresholds:
-   - ATV / On Foot (`atv`): requires `min_clear_width_m >= 1.2m`
-   - Ambulance / Pickup (`ambulance`): requires `min_clear_width_m >= 2.2m`
-   - Fire Engine (`fire_engine`): requires `min_clear_width_m >= 3.5m`
+   - ATV / On Foot (`atv`): requires `min_clear_width_m > 1.2m`
+   - Ambulance / Pickup (`ambulance`): requires `min_clear_width_m > 2.2m`
+   - Fire Engine (`fire_engine`): requires `min_clear_width_m > 3.5m`
 2. Impassable Water Rule:
    - Any edge with `water_overlap_ratio > 0` (or `has_water_obstruction == True`) receives
      `edge_weight = float('inf')` (strictly impassable for all vehicle classes, regardless of width).
@@ -66,9 +66,9 @@ def is_pedestrian_only(highway: Any) -> bool:
 
 
 VEHICLE_LABEL: dict[str, str] = {
-    VehicleClass.ATV.value: "ATV / Foot (>=1.2m)",
-    VehicleClass.AMBULANCE.value: "Ambulance / Pickup (>=2.2m)",
-    VehicleClass.FIRE_ENGINE.value: "Fire Engine (>=3.5m)",
+    VehicleClass.ATV.value: "ATV / Foot (>1.2m)",
+    VehicleClass.AMBULANCE.value: "Ambulance / Pickup (>2.2m)",
+    VehicleClass.FIRE_ENGINE.value: "Fire Engine (>3.5m)",
 }
 
 # Nominal emergency response speeds in meters per second
@@ -228,15 +228,15 @@ def is_edge_passable_for_vehicle(
     Rules:
     - Water Rule: any `water_overlap_ratio > 0` is strictly impassable (`False`) for all classes.
     - Width Thresholds:
-      * ATV / Foot: `min_clear_width_m >= 1.2m`
-      * Ambulance / Pickup: `min_clear_width_m >= 2.2m`
-      * Fire Engine: `min_clear_width_m >= 3.5m`
+      * ATV / Foot: `min_clear_width_m > 1.2m`
+      * Ambulance / Pickup: `min_clear_width_m > 2.2m`
+      * Fire Engine: `min_clear_width_m > 3.5m`
     """
     if float(water_overlap_ratio) > 0.0:
         return False
     vc = normalize_vehicle_class(vehicle_class)
     threshold_m = VEHICLE_MIN_WIDTH_M[vc]
-    return float(min_clear_width_m) >= threshold_m
+    return float(min_clear_width_m) > threshold_m
 
 
 def compute_edge_routing_weight(
@@ -611,7 +611,7 @@ def compute_shortest_route(
                         "reason": (
                             "Standing water washout (weight=inf)"
                             if float(bdata.get("water_overlap_ratio", 0.0)) > 0.0
-                            else f"Clear width {float(bdata.get('min_clear_width_m', 0.0)):.2f}m < {required_w:.1f}m required for {vc}"
+                            else f"Clear width {float(bdata.get('min_clear_width_m', 0.0)):.2f}m, not above the {required_w:.1f}m required for {vc}"
                         ),
                     }
                 )
@@ -661,7 +661,7 @@ def compute_shortest_route(
     except (nx.NetworkXNoPath, nx.NodeNotFound):
         reason = (
             f"NO PASSABLE ROUTE for {VEHICLE_LABEL[vc]}: all connecting corridors blocked "
-            f"(<{required_w:.1f}m clear width or standing water)."
+            f"(<={required_w:.1f}m clear width or standing water)."
         )
         return RouteResult(
             vehicle_class=vc,
@@ -919,7 +919,7 @@ def rank_choke_point_clearance_roi(
         restored_w = float(data.get("nominal_width_m", DEFAULT_NOMINAL_ROAD_HALF_WIDTH_M * 2.0))
 
         # Only consider edges currently blocked for `vc` that have positive debris area
-        if current_w >= required_w or debris_sqm <= 0.0 or restored_w < required_w:
+        if current_w > required_w or debris_sqm <= 0.0 or restored_w <= required_w:
             continue
 
         pair_id = (min(str(u), str(v)), max(str(u), str(v)), int(k))
@@ -1074,7 +1074,7 @@ def plan_least_debris_clearance(
         elif (
             d["has_water_obstruction"]
             or (is_pedestrian_only(d.get("highway")) and vc not in FOOT_ONLY_EXEMPT_VEHICLES)
-            or float(d["nominal_width_m"]) < VEHICLE_MIN_WIDTH_M[vc]
+            or float(d["nominal_width_m"]) <= VEHICLE_MIN_WIDTH_M[vc]
         ):
             continue
         else:

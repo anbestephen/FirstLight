@@ -8,9 +8,9 @@
   "use strict";
 
   const VEHICLE_LABELS = {
-    atv: "ATV / On foot · ≥1.2 m",
-    ambulance: "Ambulance · ≥2.2 m",
-    fire_engine: "Fire engine · ≥3.5 m",
+    atv: "ATV / On foot · >1.2 m",
+    ambulance: "Ambulance · >2.2 m",
+    fire_engine: "Fire engine · >3.5 m",
   };
 
   const VEHICLE_SHORT = {
