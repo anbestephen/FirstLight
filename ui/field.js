@@ -165,7 +165,9 @@
         weight: 3,
         fillColor: "#5b8cff",
         fillOpacity: 1,
-      }).addTo(state.markersLayer);
+      })
+        .bindTooltip("HQ", { permanent: true, direction: "top", offset: [0, -10], className: "route-end" })
+        .addTo(state.markersLayer);
     }
     if (snapshot.destination) {
       L.circleMarker([snapshot.destination[1], snapshot.destination[0]], {
@@ -174,7 +176,9 @@
         weight: 3,
         fillColor: "#e7ecf4",
         fillOpacity: 1,
-      }).addTo(state.markersLayer);
+      })
+        .bindTooltip("DEST", { permanent: true, direction: "top", offset: [0, -10], className: "route-end dest" })
+        .addTo(state.markersLayer);
     }
 
     if (fitToRoute) {

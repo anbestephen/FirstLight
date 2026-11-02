@@ -991,7 +991,7 @@
         fillOpacity: 1,
         weight: 2,
       })
-        .bindTooltip("Command post", { permanent: false })
+        .bindTooltip("HQ · command post", { permanent: true, direction: "top", offset: [0, -8], className: "route-end" })
         .addTo(state.markersLayer);
     }
 
@@ -1003,7 +1003,7 @@
         fillOpacity: 1,
         weight: 2,
       })
-        .bindTooltip("Destination", { permanent: false })
+        .bindTooltip("DEST", { permanent: true, direction: "top", offset: [0, -8], className: "route-end dest" })
         .addTo(state.markersLayer);
     }
 
