@@ -26,11 +26,13 @@
     </div>
   </header>
 
-  <div class="field-banner hidden" id="uplink-banner" role="status">
-    Internet lost — still live over local Wi-Fi. AI now runs on the command laptop.
+  <div class="field-stack">
+    <div class="field-banner hidden" id="uplink-banner" role="status">
+      Internet lost — still live over local Wi-Fi. AI now runs on the command laptop.
+    </div>
+    <div class="field-banner sim hidden" id="sim-banner" role="status"></div>
+    <div class="field-toast hidden" id="update-toast" role="status" aria-live="polite"></div>
   </div>
-
-  <div class="field-toast hidden" id="update-toast" role="status" aria-live="polite"></div>
 
   <section class="field-sheet" id="field-sheet">
     <button type="button" class="sheet-handle" id="sheet-handle" aria-label="Show all route steps" aria-expanded="false"></button>
