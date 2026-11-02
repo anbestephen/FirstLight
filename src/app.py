@@ -13,6 +13,8 @@ import json
 import math
 import os
 from pathlib import Path
+import platform
+import sys
 import threading
 from typing import Any, AsyncIterator, Literal
 
@@ -41,6 +43,7 @@ from src.failover import (
     GeometricTelemetry,
     MetaModelSuite,
     VLMFailoverRouter,
+    local_model_ready,
     release_unified_memory,
 )
 from src.geometry import (
@@ -194,7 +197,8 @@ class FirstLightState:
         self.dispatch = DispatchHub(
             uplink_probe=(
                 None if os.environ.get("FIRSTLIGHT_UPLINK_PROBE", "1") == "0" else probe_tcp_uplink
-            )
+            ),
+            ai_readiness=lambda: (bool(self.router.api_key), local_model_ready(self.router.local_mlx_model_path)),
         )
         self.router = VLMFailoverRouter(
             local_mlx_model_path=MODELS_DIR / "Muse-Glimmer-30B-4bit",
@@ -1011,33 +1015,31 @@ def get_health() -> dict[str, Any]:
     except Exception:
         pass
 
-    mlx_metal_available = False
-    try:
-        import mlx.core as mx
-
-        mlx_metal_available = bool(mx.metal.is_available())
-    except Exception:
-        pass
+    # Reported from the platform rather than by importing MLX: initialising Metal where no GPU is
+    # available (CI, sandboxes) can abort the process. Apple Silicon Macs always have it.
+    mlx_metal_available = sys.platform == "darwin" and platform.machine() == "arm64"
 
     mem_stats = release_unified_memory()
-    mlx_weights_ready = (
-        MODELS_DIR / "Muse-Glimmer-30B-4bit" / "config.json"
-    ).exists()
+    mlx_weights_ready = local_model_ready(MODELS_DIR / "Muse-Glimmer-30B-4bit")
     sam31_weights_ready = (MODELS_DIR / "sam3.1" / "model.safetensors").exists()
     cloud_key_configured = bool(state.router.api_key)
 
-    active_tier = (
-        ConnectivityTier.TIER_1_CLOUD.value
-        if cloud_key_configured
-        and state.dispatch.uplink_online is not False  # internet loss measured by the uplink probe
-        and state.router.mode in (FailoverMode.AUTO, FailoverMode.FORCE_CLOUD)
-        else (
-            ConnectivityTier.TIER_2_MLX.value
-            if mlx_weights_ready
-            and state.router.mode in (FailoverMode.AUTO, FailoverMode.FORCE_MLX)
-            else ConnectivityTier.TIER_3_DETERMINISTIC.value
-        )
-    )
+    # Same rule as the field phones (DispatchHub.ai_tier): blackout, internet loss, the API key and
+    # the laptop model's weights all count. A forced mode from the Assess panel overrides it.
+    tier_by_name = {
+        "tier_1_cloud": ConnectivityTier.TIER_1_CLOUD.value,
+        "tier_2_edge": ConnectivityTier.TIER_2_MLX.value,
+        "tier_3_deterministic": ConnectivityTier.TIER_3_DETERMINISTIC.value,
+    }
+    mode = state.router.mode
+    if mode == FailoverMode.FORCE_DETERMINISTIC:
+        active_tier = ConnectivityTier.TIER_3_DETERMINISTIC.value
+    elif mode == FailoverMode.FORCE_MLX:
+        active_tier = (ConnectivityTier.TIER_2_MLX if mlx_weights_ready else ConnectivityTier.TIER_3_DETERMINISTIC).value
+    elif mode == FailoverMode.FORCE_CLOUD:
+        active_tier = (ConnectivityTier.TIER_1_CLOUD if cloud_key_configured else ConnectivityTier.TIER_3_DETERMINISTIC).value
+    else:
+        active_tier = tier_by_name[state.dispatch.ai_tier()]
 
     return {
         "status": "ok",

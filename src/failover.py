@@ -23,6 +23,7 @@ import io
 import json
 import os
 from pathlib import Path
+import sys
 import threading
 import time
 from typing import Any, Callable, Literal
@@ -154,11 +155,27 @@ def normalize_damage_severity(raw_value: Any, default: DamageSeverity = "minor_d
     return default
 
 
+def local_model_ready(path: str | Path) -> bool:
+    """The on-laptop model is usable: config.json plus every weight shard its index lists."""
+    path = Path(path)
+    if not (path / "config.json").exists():
+        return False
+    index = path / "model.safetensors.index.json"
+    if not index.exists():
+        return any(path.glob("*.safetensors"))
+    shards = set(json.loads(index.read_text())["weight_map"].values())
+    return all((path / name).exists() and (path / name).stat().st_size > 0 for name in shards)
+
+
 def release_unified_memory() -> dict[str, Any]:
     """Free cached MLX and PyTorch-MPS buffers after a local generation; reports MLX memory left."""
     gc.collect()
     active = cached = 0
     try:
+        # Only touch MLX when a local model already loaded it: importing it fresh initialises Metal,
+        # which can abort the process where no GPU is available (CI, sandboxes).
+        if "mlx.core" not in sys.modules:
+            raise ImportError("MLX not loaded")
         import mlx.core as mx
 
         api = mx if hasattr(mx, "clear_cache") else getattr(mx, "metal", None)
@@ -960,7 +977,7 @@ class MetaModelSuite:
     def get_models_status(self, force_offline: bool = False) -> dict[str, Any]:
         """Return live readiness, latency telemetry, and call counts for all 5 Meta models."""
         cloud_configured = bool(self.router.api_key) and not force_offline
-        mlx_ready = (self.router.local_mlx_model_path / "config.json").exists()
+        mlx_ready = local_model_ready(self.router.local_mlx_model_path)
         sam_ready = self.sam_checkpoint_path.exists()
 
         models_payload: list[dict[str, Any]] = []

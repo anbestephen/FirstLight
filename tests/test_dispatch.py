@@ -164,3 +164,27 @@ def test_field_view_assets_are_served_with_zero_cdn() -> None:
     assert "https://" not in js.text
 
     assert client.get("/field.css").status_code == 200
+
+
+@pytest.mark.parametrize(
+    "cloud,edge,blackout,uplink,expected",
+    [
+        (True, True, False, True, "tier_1_cloud"),
+        (True, True, True, True, "tier_2_edge"),  # simulated blackout, laptop model installed
+        (True, True, False, False, "tier_2_edge"),  # real internet loss
+        (False, True, False, True, "tier_2_edge"),  # no API key
+        (False, False, False, True, "tier_3_deterministic"),  # no key, no laptop model
+        (True, False, True, True, "tier_3_deterministic"),  # blackout without laptop weights
+    ],
+)
+def test_ai_tier_reflects_credentials_model_weights_and_connectivity(cloud, edge, blackout, uplink, expected) -> None:
+    hub = DispatchHub(uplink_probe=None, ai_readiness=lambda: (cloud, edge))
+    hub.assignment.force_offline = blackout
+    hub.uplink_online = uplink
+    assert hub.ai_tier() == expected
+
+
+def test_field_view_keeps_a_simulation_banner_for_assumed_clearances() -> None:
+    client = TestClient(app)
+    assert 'id="sim-banner"' in client.get("/field").text
+    assert "cleared_edges" in client.get("/field.js").text

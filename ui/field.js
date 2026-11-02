@@ -204,8 +204,17 @@
     const nextEl = document.getElementById("next-instruction");
     const steps = route.steps || [];
 
+    // Simulated clearances stay visible for as long as the route depends on them,
+    // including on phones that connect after the clearance was simulated.
+    const simulated = (snapshot.cleared_edges || []).length;
+    const simBanner = document.getElementById("sim-banner");
+    simBanner.classList.toggle("hidden", simulated === 0);
+    simBanner.textContent =
+      `Simulation active: command is testing ${simulated} debris clearance${simulated === 1 ? "" : "s"}. ` +
+      "Routes may use roads not yet cleared on the ground.";
+
     if (route.reachable) {
-      statusEl.textContent = "Route clear";
+      statusEl.textContent = simulated ? "Route clear (simulation active)" : "Route clear";
       statusEl.className = "route-status ok";
       document.getElementById("metric-eta").textContent = formatEta(route.estimated_transit_time_s);
       document.getElementById("metric-dist").textContent = formatDistance(route.total_distance_m);
@@ -237,16 +246,19 @@
   function renderConnectivity(snapshot) {
     const conn = snapshot.connectivity || {};
     const aiPill = document.getElementById("ai-pill");
-    const onEdge = conn.ai_tier === "tier_2_edge";
-    aiPill.textContent = onEdge ? "AI · On-device" : "AI · Cloud";
-    aiPill.classList.toggle("ai-edge", onEdge);
-    aiPill.classList.toggle("ai-cloud", !onEdge);
+    const tier = conn.ai_tier || "tier_1_cloud";
+    const onCloud = tier === "tier_1_cloud";
+    aiPill.textContent = onCloud ? "AI · Cloud" : tier === "tier_2_edge" ? "AI · On-device" : "AI · Rules only";
+    aiPill.classList.toggle("ai-edge", !onCloud);
+    aiPill.classList.toggle("ai-cloud", onCloud);
     const banner = document.getElementById("uplink-banner");
     const uplinkLost = conn.uplink_online === false;
     banner.classList.toggle("hidden", !(uplinkLost || conn.force_offline));
+    const where =
+      tier === "tier_2_edge" ? "AI now runs on the command laptop." : "Answers now come from rules and measurements (no AI model).";
     banner.textContent = uplinkLost
-      ? "Internet lost — still live over local Wi-Fi. AI now runs on the command laptop."
-      : "Comms blackout (simulated by command) — AI now runs on the command laptop.";
+      ? `Internet lost — still live over local Wi-Fi. ${where}`
+      : `Comms blackout (simulated by command) — ${where}`;
   }
 
   function showToast(message) {

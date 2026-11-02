@@ -164,7 +164,7 @@
 
       setNetworkStatus();
       const tiers = data.vlm_tiers || {};
-      setAiPill(state.forceOffline ? "tier_2" : tiers.active_tier);
+      setAiPill(tiers.active_tier);
 
       const gsd = data.geospatial ? data.geospatial.gsd_m_per_px : 0.2804;
       document.getElementById("hw-status-badge").textContent =
@@ -1535,8 +1535,8 @@
         if (labelParent) labelParent.classList.add("active-blackout");
       }
       setNetworkStatus();
-      setAiPill("tier_2");
-      pushFieldDispatch({ force_offline: true });
+      await pushFieldDispatch({ force_offline: true });
+      fetchHealth(); // on-device only if the laptop model is installed, else rules only
       const targetEdge = state.activeEdgeId || "0";
       await Promise.all([
         runVlmAssessmentForEdge(targetEdge),
@@ -1958,9 +1958,8 @@
     blackoutToggle.addEventListener("change", async function (ev) {
       state.forceOffline = Boolean(ev.target.checked);
       setNetworkStatus();
-      if (state.forceOffline) setAiPill("tier_2");
-      else fetchHealth();
-      pushFieldDispatch({ force_offline: state.forceOffline });
+      await pushFieldDispatch({ force_offline: state.forceOffline });
+      fetchHealth(); // the server decides: cloud, the laptop model if installed, or rules only
       if (state.activeEdgeId) {
         await runVlmAssessmentForEdge(state.activeEdgeId);
       }

@@ -84,6 +84,8 @@ class DispatchHub:
     """
 
     uplink_probe: Callable[[], bool] | None = probe_tcp_uplink
+    # (cloud API key configured, on-laptop model weights present); None assumes both.
+    ai_readiness: Callable[[], tuple[bool, bool]] | None = None
     assignment: DispatchAssignment = field(default_factory=DispatchAssignment)
     version: int = 0
     last_change_reason: str = "initial"
@@ -138,10 +140,11 @@ class DispatchHub:
         return self.bump(reason)
 
     def ai_tier(self) -> str:
-        """Effective reasoning tier given manual blackout and the measured uplink state."""
-        if self.assignment.force_offline or self.uplink_online is False:
-            return "tier_2_edge"
-        return "tier_1_cloud"
+        """Where reasoning runs now: cloud if reachable and configured, else the laptop model, else rules."""
+        cloud_ready, edge_ready = self.ai_readiness() if self.ai_readiness else (True, True)
+        if cloud_ready and not self.assignment.force_offline and self.uplink_online is not False:
+            return "tier_1_cloud"
+        return "tier_2_edge" if edge_ready else "tier_3_deterministic"
 
     def connectivity(self) -> dict[str, Any]:
         return {
