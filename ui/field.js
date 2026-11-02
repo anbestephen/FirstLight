@@ -50,13 +50,13 @@
     const vehicle = VEHICLE_SHORT[snapshot.vehicle_class] || snapshot.vehicle_class;
     switch (snapshot.reason) {
       case "debris_cleared":
-        return { text: `Debris cleared${detail} — route updated`, warn: false };
+        return { text: `Simulated clearance${detail} — route updated`, warn: false };
       case "clearance_undone":
-        return { text: `Clearance undone${detail} — route updated`, warn: true };
+        return { text: `Simulated clearance undone${detail} — route updated`, warn: true };
       case "clearances_reset":
-        return { text: "All clearances reset — route updated", warn: true };
+        return { text: "All simulated clearances reset — route updated", warn: true };
       case "road_remeasured":
-        return { text: `Re-measured from drone imagery${detail} — route updated`, warn: false };
+        return { text: `Re-measured from recorded 2018 drone imagery${detail} — route updated`, warn: false };
       case "drone_reset":
         return { text: "Drone re-measurements removed — route updated", warn: true };
       case "vehicle_changed":

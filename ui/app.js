@@ -1183,7 +1183,7 @@
       const textEl = document.getElementById("unlocked-impact-text");
       if (bannerEl && textEl) {
         textEl.textContent =
-          `Cleared ${priorRec.road_name}: +${priorRec.high_severity_structures_unlocked} severely damaged buildings now reachable`;
+          `Simulated clearance of ${priorRec.road_name}: +${priorRec.high_severity_structures_unlocked} severely damaged buildings now reachable`;
         bannerEl.classList.remove("hidden");
         clearTimeout(state.toastTimer);
         state.toastTimer = setTimeout(function () {
