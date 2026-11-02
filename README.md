@@ -2,9 +2,18 @@
 
 **Offline-first disaster access mapping.** FirstLight tells emergency responders not just which buildings are damaged, but which vehicle (fire engine, ambulance or ATV) can physically reach them, and it keeps working when the internet goes down.
 
-Built for the **Meta Global AI Developer Hackathon** (Track A, *Build for Your World*) on a real event: **Hurricane Michael at Mexico Beach, Florida** (landfall Oct 10, 2018).
+Built for the **Meta Global AI Developer Hackathon** on a real event: **Hurricane Michael at Mexico Beach, Florida** (landfall Oct 10, 2018).
 
-![Commander dashboard: the Muse Spark agent dispatches an ambulance; every number in its answer is traced to a tool result](docs/img/commander-agent.png)
+| Submission | |
+| :--- | :--- |
+| Problem statement | Build for Your World |
+| Prize track | Indie Developer |
+| Team | Ambes Debretsion (solo) |
+| Demo video | *link added at submission* |
+| Built during the event | Everything except the pre-existing items in the [build log](#hackathon-build-log): the project plan, agent rules, public data and model downloads, and three early scaffolding commits whose code was deleted or rewritten during the event. |
+| Runs without an API key or model download | Yes: see [Quickstart](#quickstart) |
+
+![Commander dashboard: the Muse Spark agent dispatches an ambulance; every number in its answer is matched to a tool result](docs/img/commander-agent.png)
 
 ---
 
@@ -21,7 +30,7 @@ Damage maps (xView2, Microsoft and others) show *what* is destroyed. After a hur
 | **Building damage from before/after imagery** | Muse Spark grades all 334 buildings from a 2017 (before) / 2018 (after) image pair. |
 | **What to clear first** | Ranks debris piles by severely damaged buildings unlocked per m² cleared. For a block no vehicle can reach, finds the set of segments with the least total debris whose clearance opens a route, and says which need drone recon first. |
 | **Drone check for uncertain roads** | Roads flagged "drone check advised" can be re-measured with the same SAM 3.1 instrument on real drone imagery of Mexico Beach (CRASAR, about 1.8x sharper), and the routes update live. |
-| **Commander agent with verified answers** | Ask in plain language. Muse Spark calls deterministic tools, and **every number in its answer is checked against the tool results**. |
+| **Commander agent with number-checked answers** | Ask in plain language. Muse Spark calls deterministic tools, and **every number in its answer must appear in a tool result** (a numeric consistency check). |
 | **Three-tier failover** | Meta Cloud (Muse Spark) → Muse Glimmer 30B on the laptop (MLX, 4-bit) → no-model geometry and routing. The map never goes dark. |
 | **Live field phones over local Wi-Fi** | Phones follow the commander's dispatch in real time and detect internet loss within about 5 s. |
 | **Honest, held-out benchmark** | Model outputs are scored against blind hand labels; tuning and test sets are separate. |
@@ -39,10 +48,12 @@ Damage maps (xView2, Microsoft and others) show *what* is destroyed. After a hur
 | :--- | :--- | :--- |
 | **SAM 3.1** (`Sam3Model`, fp16) | Locally on Apple Silicon (PyTorch MPS) | Text-prompted segmentation (`road`, `debris`, `standing water`) on 89 road tiles; the probability maps drive the 5 m width measurements. Baked once (~5 min on an M1 Max), so the field laptop needs no GPU work at demo time. |
 | **Muse Spark 1.3** (`muse-spark-1.3`) | Meta Model API | (1) Grades each building from a before/after image pair (xBD scale). (2) Plans the commander agent's tool calls with native function calling and writes the answer. (3) Grades a selected road corridor from its aerial crop. |
-| **Muse Glimmer 30B, 4-bit** (open weights) | Locally on Apple Silicon (MLX) | Offline fallback for grading and for the agent (same tools via a JSON action protocol). Kept resident in memory. Grades with low reasoning; agent steps skip reasoning, since every number is verified against tool output anyway. Chosen over Llama 3.2 11B Vision on the held-out test set ([comparison](#offline-model-choice)). |
+| **Muse Glimmer 30B, 4-bit** (open weights) | Locally on Apple Silicon (MLX) | Offline fallback for grading and for the agent (same tools via a JSON action protocol). Kept resident in memory. Grades with low reasoning; agent steps skip reasoning, since every number is verified against tool output anyway. Chosen over Llama 3.2 11B Vision by comparing both on the test set ([comparison](#offline-model-choice)). |
 | **Muse Voice Transcribe 1.0** (`muse-voice-transcribe-1.0`) | Meta Model API (realtime WebSocket) | Push-to-talk questions to the commander agent. The dashboard streams microphone audio through the laptop (the API key never reaches the browser), and the words appear as they are recognised. The final transcript arrives about 0.25 s after release. It needs the internet; when the link is down the dashboard says to type instead. |
 
 Experimental integration (in the UI, not part of the core demo): **Muse Wonder 1.0** incident briefing. It labels its output with the model or fallback that produced it.
+
+**Every model FirstLight calls at runtime is a Meta model.** Llama 3.2 11B Vision (also Meta) appears only in the offline-model comparison benchmark; the app never calls it.
 
 ---
 
@@ -85,7 +96,7 @@ No single pile opens any of the five worst-hit blocks, so the **clearance path**
 - **Example:** an ambulance to the worst-hit block needs 3 segments cleared (36 m² measured, 1 unmeasured, all 3 flagged for drone recon) for a 1.3 km route.
 
 **Commander agent** ([`src/agent.py`](src/agent.py), [`src/agent_tools.py`](src/agent_tools.py)). Seven tools: `measure_road`, `damage_hotspots`, `plan_route`, `plan_clearance_path`, `rank_clearance`, `reachability_summary`, `dispatch_field_unit`. They only read the measured graph and the graded buildings. After the model answers:
-- every number in the answer is matched against the tool results;
+- every number in the answer must appear in a tool result. This is a numeric consistency check: it catches invented numbers, but not a real number attached to the wrong road;
 - untraceable numbers get one rewrite, then are shown in red;
 - dispatch refuses destinations with no passable route.
 
@@ -121,7 +132,7 @@ Reproduce: `./.venv/bin/python benchmarks/run_benchmarks.py` → [`benchmarks/be
 
 ### Offline model choice
 
-Two open-weights models were scored on the same 38 held-out test buildings, using the same prompt and before/after images as Muse Spark, on the M1 Max:
+Two open-weights models were scored on the same 38 held-out test buildings, using the same prompt and before/after images as Muse Spark, on the M1 Max. Because this comparison chose Muse Glimmer, its scores here are a model-selection result, not an untouched estimate of its accuracy.
 
 | Model (MLX, 4-bit) | Exact | Within one class | High-severity recall / precision | Median s per building | Agent questions answered with a tool call |
 | :--- | :---: | :---: | :---: | :---: | :---: |
@@ -132,13 +143,13 @@ Two open-weights models were scored on the same 38 held-out test buildings, usin
 
 - **Llama calls almost everything severe.** It also answered "Is 15th Street passable?" without measuring the road.
 - **Muse Glimmer at low reasoning grades.** It is now the offline tier.
-- **Agent steps skip reasoning.** Tool choice is just as good without it, and every number in the answer is verified against tool output either way.
+- **Agent steps skip reasoning.** Tool choice is just as good without it, and every number in the answer is checked against tool output either way.
 
 Reproduce: `./.venv/bin/python benchmarks/edge_model_comparison.py` → [`benchmarks/edge_model_comparison.json`](benchmarks/edge_model_comparison.json) (about 50 min).
 
 ### Independent check: CRASAR drone labels
 
-[CRASAR-U-DROIDs](https://huggingface.co/datasets/CRASAR/CRASAR-U-DROIDs) (Center for Robot-Assisted Search and Rescue, CC BY 4.0) includes two drone surveys of Mexico Beach, flown Oct 13 and Oct 14, 2018 at about 2 cm per pixel. Its expert annotators labelled building damage (same xBD scale) and road conditions along OpenStreetMap roads. FirstLight never sees this data: our grades and widths come from the Oct 11 NOAA image at 0.28 m per pixel.
+[CRASAR-U-DROIDs](https://huggingface.co/datasets/CRASAR/CRASAR-U-DROIDs) (Center for Robot-Assisted Search and Rescue, CC BY 4.0) includes two drone surveys of Mexico Beach, flown Oct 13 and Oct 14, 2018 at about 2 cm per pixel. Its expert annotators labelled building damage (same xBD scale) and road conditions along OpenStreetMap roads. None of it was used to produce the grades and widths checked here: those come from the Oct 11 NOAA image at 0.28 m per pixel. (The drone *imagery* is used separately in the drone-check experiment below.)
 
 | Check | Result |
 | :--- | :--- |
@@ -160,7 +171,7 @@ Reproduce: `./.venv/bin/python benchmarks/crasar_validation.py` → [`benchmarks
 
 ### Drone check: re-measuring flagged roads
 
-The NOAA image flags 80 roads "drone check advised" (no visible pavement, sand, or low confidence). In the field a crew would fly a drone over them. FirstLight shows what that step does with drone imagery that already exists: CRASAR's Oct 13 and Oct 14 orthomosaics.
+The NOAA image flags 80 roads "drone check advised" (no visible pavement, sand, or low confidence). In the field a crew would fly a drone over them. FirstLight shows what that step does with drone imagery that already exists: CRASAR's Oct 13 and Oct 14 orthomosaics. **This is a recorded-data experiment, not a live flight:** the measurements are computed in advance, and the dashboard's **Drone check** applies them.
 
 - **How:**
   - only a patch around each road is read, over HTTP from the internal overviews, at about 0.16 m per pixel;
@@ -186,6 +197,8 @@ Reproduce: `./.venv/bin/python scripts/drone_remeasure.py` (needs the internet; 
 
 ## Limitations
 
+- **Answer checking is numeric:** the agent's numbers must come from tool results, but a correct number attached to the wrong road would pass. The deterministic answer templates avoid this; model-written answers rely on the tools' labelled fields.
+- **Damage grades are model estimates:** "severely damaged buildings" counts are Muse Spark grades (high-severity precision 0.22 on test), useful to prioritise checks, not confirmed damage.
 - **Sand-covered pavement:** SAM can confidently read it as clear road (3 false-passables on dev).
 - **SAM misses some faint roads:** these are treated as blocked and flagged for drone reconnaissance (the conservative choice).
 - **Building grading is the weakest part:**
@@ -203,14 +216,25 @@ Reproduce: `./.venv/bin/python scripts/drone_remeasure.py` (needs the internet; 
 
 ## Quickstart
 
-Apple Silicon Mac, Python 3.11+.
+Tested on an Apple Silicon Mac (M1 Max, 64 GB) with Python 3.11+.
+
+**Judge quick path (no API key, no model download).** The SAM 3.1 measurements, Muse Spark grades and drone re-measurements are committed, so a fresh clone runs the dashboard, measurement views, routing, clearance planning, drone check, field phones and the rules-only agent:
 
 ```bash
 python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
-./.venv/bin/python scripts/setup_data_and_models.py --check      # or --download on a fresh clone
-cp .env.example .env   # then add your Meta Model API key; optional: without it FirstLight runs on the laptop
+./.venv/bin/python scripts/setup_data_and_models.py --download --no-models   # ~1 min: map tiles + drone photos (~124 MB)
 ./.venv/bin/uvicorn src.app:app --host 0.0.0.0 --port 8000
 ```
+
+**Full Meta setup (the AI tiers):**
+
+```bash
+cp .env.example .env    # add your Meta Model API key: Muse Spark agent and grading, Muse Voice
+./.venv/bin/python scripts/setup_data_and_models.py --download   # + Muse Glimmer 30B 4-bit (~17 GB) and SAM 3.1
+./.venv/bin/python scripts/setup_data_and_models.py --check      # shows what each optional asset enables
+```
+
+Muse Glimmer runs through MLX, so the on-laptop AI tier needs Apple Silicon. SAM 3.1 weights are only needed to re-run the measurement bake.
 
 | Page | URL |
 | :--- | :--- |
@@ -248,11 +272,15 @@ Building opened when the kickoff ended, at 12:24 PM ET on Oct 26, 2026, and runs
 - **Pre-existing (before 12:24 PM ET):**
   - the project plan ([`PLAN.md`](PLAN.md)) and agent rules (`.agents/`, the first lines of `AGENTS.md`);
   - public data and model downloads: the NOAA post-storm image of Mexico Beach (`data/noaa_michael_mexico_beach.tif`), OpenStreetMap extracts (`data/osm_*`), and the SAM 3.1 and Llama 3.2 weights;
-  - early code in commits `04542ed` (12:01 PM), `b489ebe` (12:15 PM) and `4a06adc` (12:24 PM). None of that code remains in use:
-    - its unused parts were deleted;
-    - the parts still needed (`src/geometry.py`, the grading router in `src/failover.py`, their tests and the project config) were rewritten during the event.
+  - three early commits, listed here with what happened to each:
 
-    Lines that `git blame` still attributes to those commits are shared imports, constants and interface names.
+    | Commit (Oct 26) | Contents | Status |
+    | :--- | :--- | :--- |
+    | `04542ed` 12:01 PM | `PLAN.md`, agent rules (`.agents/`, `AGENTS.md`), `requirements.txt`, `.gitignore`, vendored Leaflet 1.9.4 | Plan kept unchanged as a record; requirements and `.gitignore` rewritten since; Leaflet is the unmodified third-party library |
+    | `b489ebe` 12:15 PM | OpenStreetMap extracts (`data/osm_*`), `pyproject.toml`, `src/geometry.py`, `tests/test_geometry.py` | OSM data unchanged (public data); geometry code, tests and config rewritten in `a78547e` (Oct 30) |
+    | `4a06adc` 12:24 PM | Grading router in `src/failover.py`, `tests/test_failover.py` | Rewritten in `a78547e` (Oct 30) |
+
+    Lines that `git blame` still attributes to those commits are shared imports, constants and interface names. History is kept as it happened; nothing was re-dated.
 - **Built during the event:** everything else.
   - **Oct 26:** first versions of routing, the API and the dashboard, then the field-phone sync, latency work and the measurement replay (`80b1501` … `bc39159`).
 - **Building period (Oct 27 onward):**
@@ -265,7 +293,8 @@ Building opened when the kickoff ended, at 12:24 PM ET on Oct 26, 2026, and runs
   - push-to-talk questions through Muse Voice Transcribe, replacing a preset-command placeholder (Oct 29);
   - least-debris clearance paths to blocks no vehicle can reach (Oct 29);
   - redesigned commander dashboard and field view: KPI cards, side panels, a Meta models panel and a road inspector (Oct 29);
-  - independent check against CRASAR drone labels, and drone re-measurement of flagged roads (Oct 30).
+  - independent check against CRASAR drone labels, and drone re-measurement of flagged roads (Oct 30);
+  - street labels, measured cross-sections in the inspector, clearance ranking from the command post, internet-loss display on the dashboard, strict width thresholds, and a no-download judge setup (Oct 31–Nov 1).
 
 ---
 
