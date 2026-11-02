@@ -199,6 +199,7 @@ async def test_async_tier2_runs_off_the_event_loop(fake_mlx_dir: Path) -> None:
     assert ticks_during_generation >= 3
 
 
+@pytest.mark.mlx
 def test_mllama_cross_attention_kv_memo_matches_original_and_skips_reprojection() -> None:
     mx = pytest.importorskip("mlx.core")
     language = pytest.importorskip("mlx_vlm.models.mllama.language")

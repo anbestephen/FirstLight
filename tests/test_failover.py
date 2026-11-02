@@ -255,6 +255,7 @@ async def test_meta_model_suite_offline_briefing() -> None:
     assert "[DETERMINISTIC GEOMETRIC TRIAGE — NO LLM EXECUTED]" in briefing.executive_summary
 
 
+@pytest.mark.mlx
 def test_local_prompt_uses_low_reasoning_and_keeps_only_the_user_message(monkeypatch: pytest.MonkeyPatch) -> None:
     prompt_utils = pytest.importorskip("mlx_vlm.prompt_utils")
     from src.failover import format_local_prompt, local_final_answer
