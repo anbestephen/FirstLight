@@ -1,6 +1,7 @@
 /* FirstLight field view. Design process: unslop by Damir Sokolovsky (@heydamir), CC BY 4.0.
    Offline system fonts and the same slate / route-blue palette as the commander. */
 :root {
+  color-scheme: dark;
   --bg: #0a0e15;
   --sheet: #0d121b;
   --card: #111722;
