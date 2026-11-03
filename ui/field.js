@@ -130,11 +130,11 @@
         return [c[1], c[0]];
       });
       // Thinner than the route, on a dark casing; blocked dashed and water dotted (same as the dashboard).
-      let style = { color: "#34d399", weight: 2.5, opacity: 0.75 };
+      let style = { color: "#63c7a5", weight: 2.5, opacity: 0.75 };
       if (water.has(id)) {
         style = { color: "#a78bfa", weight: 3, opacity: 0.95, dashArray: "1, 7", lineCap: "round" };
       } else if (blocked.has(id)) {
-        style = { color: "#f87171", weight: 3, opacity: 0.9, dashArray: "10, 7" };
+        style = { color: "#dc878b", weight: 3, opacity: 0.9, dashArray: "10, 7" };
       }
       L.polyline(latLngs, {
         color: "#0a0e15", weight: style.weight + 2.5, opacity: 0.55, interactive: false,
@@ -169,7 +169,7 @@
         fillColor: "#5b8cff",
         fillOpacity: 1,
       })
-        .bindTooltip("HQ", { permanent: true, direction: "top", offset: [0, -10], className: "route-end" })
+        .bindTooltip("Command post", { permanent: true, direction: "top", offset: [0, -10], className: "route-end" })
         .addTo(state.markersLayer);
     }
     if (snapshot.destination) {
@@ -180,15 +180,20 @@
         fillColor: "#e7ecf4",
         fillOpacity: 1,
       })
-        .bindTooltip("DEST", { permanent: true, direction: "top", offset: [0, -10], className: "route-end dest" })
+        .bindTooltip("Destination", { permanent: true, direction: "top", offset: [0, -10], className: "route-end dest" })
         .addTo(state.markersLayer);
     }
 
     if (fitToRoute) {
+      const top = Math.ceil(document.querySelector(".field-stack").getBoundingClientRect().bottom) + 16;
+      const bottom = document.getElementById("field-sheet").offsetHeight + 24;
+      // An expanded sheet and stacked warnings can occupy most of a short screen.
+      // Keep Leaflet's fitting area positive even when an assignment arrives in that state.
+      const scale = Math.min(1, Math.max(0, state.map.getSize().y - 96) / (top + bottom));
       const padding = {
-        paddingTopLeft: [24, 80],
-        paddingBottomRight: [24, 340],
-        animate: Boolean(animateFit),
+        paddingTopLeft: [24, top * scale],
+        paddingBottomRight: [24, bottom * scale],
+        animate: Boolean(animateFit) && !window.matchMedia("(prefers-reduced-motion: reduce)").matches,
       };
       if (routeLine) {
         state.map.fitBounds(routeLine.getBounds(), padding);
@@ -241,6 +246,10 @@
     }
     document.getElementById("metric-avoided").textContent = String(route.blocked_segments_avoided || 0);
 
+    document.getElementById("route-recon").classList.toggle(
+      "hidden", !route.reachable || !steps.some(function (step) { return step.needs_drone_recon; })
+    );
+
     document.getElementById("step-list").innerHTML = steps
       .map(function (st) {
         const drone = st.needs_drone_recon ? ` <span class="drone-flag">· verify by drone</span>` : "";
@@ -284,11 +293,6 @@
       el.classList.add("hidden");
     }, 4500);
 
-    const sheet = document.getElementById("field-sheet");
-    sheet.classList.remove("flash");
-    void sheet.offsetWidth;
-    sheet.classList.add("flash");
-
     if (navigator.vibrate) {
       navigator.vibrate([120, 60, 120]);
     }
@@ -304,10 +308,11 @@
     const versionChanged = !isFirst && snapshot.version !== state.lastVersion;
     const reassigned = assignmentKey !== state.lastAssignmentKey;
 
-    renderRoads(snapshot);
-    renderRoute(snapshot, isFirst || reassigned, !isFirst);
     renderSheet(snapshot);
     renderConnectivity(snapshot);
+    updateBannerPosition();
+    renderRoads(snapshot);
+    renderRoute(snapshot, isFirst || reassigned, !isFirst);
 
     if (versionChanged) {
       const message = toastMessage(snapshot);
@@ -353,18 +358,30 @@
     el.textContent = secs < 3 ? "Updated just now" : `Updated ${secs} s ago`;
   }
 
+  function updateBannerPosition() {
+    const bottom = document.querySelector(".field-topbar").getBoundingClientRect().bottom;
+    document.documentElement.style.setProperty("--field-banner-top", `${Math.ceil(bottom) + 8}px`);
+    const stackBottom = document.querySelector(".field-stack").getBoundingClientRect().bottom;
+    document.documentElement.style.setProperty("--field-content-top", `${Math.ceil(stackBottom)}px`);
+  }
+
   function bindSheetToggle() {
     const sheet = document.getElementById("field-sheet");
     const handle = document.getElementById("sheet-handle");
     handle.addEventListener("click", function () {
       const expanded = sheet.classList.toggle("expanded");
       handle.setAttribute("aria-expanded", String(expanded));
+      handle.setAttribute("aria-label", expanded ? "Hide route steps" : "Show all route steps");
     });
   }
 
   document.addEventListener("DOMContentLoaded", async function () {
     initMap();
     bindSheetToggle();
+    const layoutObserver = new ResizeObserver(updateBannerPosition);
+    layoutObserver.observe(document.querySelector(".field-topbar"));
+    layoutObserver.observe(document.querySelector(".field-stack"));
+    updateBannerPosition();
     setInterval(tickUpdatedAgo, 1000);
     try {
       await loadBaseLayers();

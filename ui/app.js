@@ -38,9 +38,9 @@
 
   // Map colours match the legend and the CSS tokens.
   const C = {
-    open: "#34d399",
-    narrow: "#f5a524",
-    blocked: "#f87171",
+    open: "#63c7a5",
+    narrow: "#e5b665",
+    blocked: "#dc878b",
     water: "#a78bfa",
     route: "#5b8cff",
     ink: "#0a0e15",
@@ -286,7 +286,7 @@
     }
 
     const sevColors = {
-      destroyed: "#f87171",
+      destroyed: "#dc878b",
       major_damage: "#fb923c",
       minor_damage: "#facc15",
       no_damage: "#64748b",
@@ -995,7 +995,7 @@
         fillOpacity: 1,
         weight: 2,
       })
-        .bindTooltip("HQ · command post", { permanent: true, direction: "top", offset: [0, -8], className: "route-end" })
+        .bindTooltip("Command post", { permanent: true, direction: "top", offset: [0, -8], className: "route-end" })
         .addTo(state.markersLayer);
     }
 
@@ -1007,7 +1007,7 @@
         fillOpacity: 1,
         weight: 2,
       })
-        .bindTooltip("DEST", { permanent: true, direction: "top", offset: [0, -8], className: "route-end dest" })
+        .bindTooltip("Destination", { permanent: true, direction: "top", offset: [0, -8], className: "route-end dest" })
         .addTo(state.markersLayer);
     }
 
@@ -1579,7 +1579,7 @@
   }
 
   function summarizeToolResult(name, r) {
-    if (!r || r.error) return `⚠ ${r ? r.error : "no result"}`;
+    if (!r || r.error) return `Warning: ${r ? r.error : "no result"}`;
     if (name === "measure_road") {
       const ok = Object.keys(r.passable_end_to_end || {}).filter((k) => r.passable_end_to_end[k]);
       return `${r.road}: narrowest ${r.narrowest_clear_width_m} m · passable for ${ok.length ? ok.join(", ") : "none"}`;
@@ -1712,7 +1712,7 @@
         const ok = v.unverified.length === 0;
         verifyEl.className = `agent-verify ${ok ? "ok" : "bad"}`;
         verifyEl.textContent =
-          (ok ? `✓ ${v.verified}/${v.total} numbers traced to tool results` : `⚠ ${v.unverified.length} number(s) not traceable: ${v.unverified.join(", ")}`) +
+          (ok ? `✓ ${v.verified}/${v.total} numbers traced to tool results` : `Warning: ${v.unverified.length} number(s) not traceable: ${v.unverified.join(", ")}`) +
           ` · ${AGENT_TIER_LABELS[ev.tier] || ev.tier} · ${(ev.latency_ms / 1000).toFixed(1)} s`;
       }
     }
@@ -1772,7 +1772,7 @@
     const btn = document.getElementById("agent-mic-btn");
     btn.classList.toggle("listening", on);
     btn.setAttribute("aria-pressed", String(on));
-    btn.innerHTML = on ? "&#x25A0; Stop" : "&#x1F399; Talk";
+    document.getElementById("agent-mic-label").textContent = on ? "Stop" : "Talk";
   }
 
   async function startVoice() {

@@ -195,20 +195,22 @@
       <div id="map" class="map-canvas" aria-label="Mexico Beach map"></div>
 
       <section class="kpis" aria-label="Situation">
-        <div class="kpi" id="kpi-reach">
-          <span class="kpi-label" title="Buildings Muse Spark grades major damage or destroyed: model estimates, to prioritise checks, not confirmed damage">Damaged buildings reachable (est.)</span>
-          <div class="kpi-value"><span class="num warn" id="kpi-reach-val">–</span><span class="of" id="kpi-reach-of"></span></div>
-          <span class="kpi-sub" id="kpi-reach-sub">from the command post</span>
-        </div>
-        <div class="kpi" id="kpi-roads">
-          <span class="kpi-label" id="kpi-roads-label">Roads open</span>
-          <div class="kpi-value"><span class="num" id="kpi-roads-val">–</span><span class="of" id="kpi-roads-of"></span></div>
-          <span class="kpi-sub">measured by SAM 3.1 every 5 m</span>
-        </div>
-        <div class="kpi" id="kpi-clear">
-          <span class="kpi-label">Best next clearance</span>
-          <div class="kpi-value"><span class="num ok" id="kpi-clear-val">–</span><span class="of">bldgs</span></div>
-          <span class="kpi-sub" id="kpi-clear-sub">–</span>
+        <div class="kpi-strip">
+          <div class="kpi" id="kpi-reach">
+            <span class="kpi-label" title="Buildings Muse Spark grades major damage or destroyed: model estimates, to prioritise checks, not confirmed damage">Damaged buildings reachable (est.)</span>
+            <div class="kpi-value"><span class="num" id="kpi-reach-val">–</span><span class="of" id="kpi-reach-of"></span></div>
+            <span class="kpi-sub" id="kpi-reach-sub">from the command post</span>
+          </div>
+          <div class="kpi" id="kpi-roads">
+            <span class="kpi-label" id="kpi-roads-label">Roads open</span>
+            <div class="kpi-value"><span class="num" id="kpi-roads-val">–</span><span class="of" id="kpi-roads-of"></span></div>
+            <span class="kpi-sub">measured by SAM 3.1 every 5 m</span>
+          </div>
+          <div class="kpi" id="kpi-clear">
+            <span class="kpi-label">Best next clearance</span>
+            <div class="kpi-value"><span class="num ok" id="kpi-clear-val">–</span><span class="of">buildings</span></div>
+            <span class="kpi-sub" id="kpi-clear-sub">–</span>
+          </div>
         </div>
         <!-- Active route summary -->
         <div class="kpi kpi-route route-banner" id="route-banner">
@@ -285,12 +287,15 @@
           <button type="button" class="agent-chip" data-q="Is 15th Street passable for an ambulance?">Is 15th Street passable?</button>
         </div>
         <form class="agent-form" id="agent-form" autocomplete="off">
-          <svg class="agent-spark" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M6 6l2 2M16 16l2 2M6 18l2-2M16 8l2-2"/></svg>
           <input type="text" id="agent-input" class="agent-input" maxlength="500"
-                 placeholder="Ask anything, e.g. which pile should we clear first?" aria-label="Ask FirstLight" />
+                 placeholder="Ask about a road, route or clearance" aria-label="Ask FirstLight" />
           <span class="agent-voice-status" id="agent-voice-status" aria-live="polite"></span>
           <button type="button" class="btn btn-mic agent-mic-btn" id="agent-mic-btn" aria-pressed="false"
-                  title="Push to talk: speak your question (Muse Voice Transcribe)">&#x1F399; Talk</button>
+                  title="Push to talk: speak your question (Muse Voice Transcribe)">
+            <svg class="agent-mic-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>
+            <svg class="agent-mic-stop" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+            <span id="agent-mic-label">Talk</span>
+          </button>
           <button type="submit" class="btn btn-primary agent-ask-btn" id="agent-ask-btn">Ask</button>
         </form>
       </section>
