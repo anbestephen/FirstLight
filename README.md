@@ -309,7 +309,8 @@ Building opened when the kickoff ended, at 12:24 PM ET on Oct 26, 2026, and runs
   - least-debris clearance paths to blocks no vehicle can reach (Oct 29);
   - redesigned commander dashboard and field view: KPI cards, side panels, a Meta models panel and a road inspector (Oct 29);
   - independent check against CRASAR drone labels, and drone re-measurement of flagged roads (Oct 30);
-  - street labels, measured cross-sections in the inspector, clearance ranking from the command post, internet-loss display on the dashboard, strict width thresholds, and a no-download judge setup (Oct 31–Nov 1).
+  - street labels, measured cross-sections in the inspector, clearance ranking from the command post, internet-loss display on the dashboard, strict width thresholds, and a no-download judge setup (Oct 31–Nov 1);
+  - calmer dashboard and field-phone styling: one KPI strip, "Command post" and "Destination" route labels, line icons, an amber AI pill when answers move on-device, and a route-wide "drone check advised" line on the phone (Nov 3).
 
 ---
 
