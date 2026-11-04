@@ -9,7 +9,7 @@ Built for the **Meta Global AI Developer Hackathon** on a real event: **Hurrican
 | Problem statement | Build for Your World |
 | Prize track | Indie Developer |
 | Team | Ambes Debretsion (solo) |
-| Demo video | [youtube.com/watch?v=zM4b-oUhnQs](https://www.youtube.com/watch?v=zM4b-oUhnQs) (3 min, captions on) |
+| Demo video | [youtube.com/watch?v=zM4b-oUhnQs](https://www.youtube.com/watch?v=zM4b-oUhnQs) (3 min; turn on CC for captions) |
 | Built during the event | Everything except the pre-existing items in the [build log](#hackathon-build-log): the project plan, agent rules, public data and model downloads, and three early scaffolding commits whose code was deleted or rewritten during the event. |
 | Runs without an API key or model download | Yes: see [Quickstart](#quickstart) |
 
