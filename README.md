@@ -231,7 +231,7 @@ Reproduce: `./.venv/bin/python scripts/drone_remeasure.py` (needs the internet; 
 
 ## Quickstart
 
-Tested on an Apple Silicon Mac (M1 Max, 64 GB) with Python 3.11+.
+Tested on an Apple Silicon Mac (M1 Max, 64 GB) with Python 3.12, from a fresh clone. Use Python **3.11–3.14**: 3.15 is too new (`sentencepiece` has no wheel for it yet), and the macOS system Python is 3.9. Check with `python3 --version`; if it is outside that range, use e.g. `python3.12` in the first command.
 
 **Judge quick path (no API key, no model download).** The SAM 3.1 measurements, Muse Spark grades and drone re-measurements are committed, so a fresh clone runs the dashboard, measurement views, routing, clearance planning, drone check, field phones and the rules-only agent:
 
