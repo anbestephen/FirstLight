@@ -51,7 +51,7 @@ def test_dispatch_snapshot_contains_route_passability_and_connectivity() -> None
         assert key in route
     assert isinstance(snap["impassable_edge_ids"], list)
     assert isinstance(snap["water_edge_ids"], list)
-    assert snap["connectivity"]["ai_tier"] in ("tier_1_cloud", "tier_2_edge")
+    assert snap["connectivity"]["ai_tier"] in ("tier_1_cloud", "tier_2_edge", "tier_3_deterministic")
 
 
 def test_post_dispatch_bumps_version_only_on_real_changes() -> None:
@@ -69,7 +69,9 @@ def test_post_dispatch_bumps_version_only_on_real_changes() -> None:
 
     blackout = client.post("/api/dispatch", json={"force_offline": True}).json()
     assert blackout["reason"] == "comms_blackout_on"
-    assert blackout["connectivity"]["ai_tier"] == "tier_2_edge"
+    # A blackout never uses the cloud; without Muse Glimmer weights (a fresh clone) it falls back to rules.
+    _, edge_ready = state.dispatch.ai_readiness() if state.dispatch.ai_readiness else (True, True)
+    assert blackout["connectivity"]["ai_tier"] == ("tier_2_edge" if edge_ready else "tier_3_deterministic")
     client.post("/api/dispatch", json={"force_offline": False, "vehicle_class": "fire_engine"})
 
 
